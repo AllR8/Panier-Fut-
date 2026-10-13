@@ -32,12 +32,13 @@ Le modèle `deepseek-flash` lit directement les images. Un plan typique (≈ 10 
 
 ### Option A — Compilation sur GitHub (rien à installer sur ton PC)
 
-1. Crée un dépôt **privé** sur <https://github.com/new> (ex. `panier-fute`).
-2. Envoie-y le contenu de ce dossier, par exemple avec GitHub Desktop, ou par glisser-déposer dans « Add file › Upload files ». Le dossier `.github` doit être inclus.
-3. Ouvre l'onglet **Actions**. La compilation « Compiler l'APK » démarre toute seule et dure environ 5 minutes.
-4. Dans l'exécution terminée, télécharge l'artefact **PanierFute-apk** (un .zip contenant `app-debug.apk`).
-5. Copie l'APK sur ton téléphone, ou ouvre le lien GitHub directement depuis le Galaxy.
-6. Ouvre-le et autorise « Installer des applis inconnues » pour Mes fichiers ou Chrome.
+Chaque envoi sur la branche `main` compile l'APK (environ 3 minutes) et le publie sur la page Releases du dépôt. Pour l'installer :
+
+1. Sur le Galaxy, ouvre Chrome et connecte-toi à github.com (le dépôt est privé).
+2. Ouvre <https://github.com/AllR8/Panier-Fut-/releases/latest/download/PanierFute.apk> : le téléchargement commence.
+3. Ouvre le fichier téléchargé. Autorise Chrome à « Installer des applis inconnues » si Android le demande, puis touche **Installer**.
+
+Si l'installation est bloquée sans explication, désactive temporairement le **Blocage automatique** de Samsung (Paramètres › Sécurité et confidentialité › Blocage automatique).
 
 ### Option B — Android Studio (Windows)
 
