@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Panier d'épicerie crème avec une étiquette « rabais » jaune -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Anse -->
+    <path
+        android:pathData="M40,48 C40,31 68,31 68,48"
+        android:strokeColor="#FFF6EBD3"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+    <!-- Rebord -->
+    <path
+        android:fillColor="#FFF6EBD3"
+        android:pathData="M29,45 L79,45 Q81,45 81,47 L81,51 Q81,53 79,53 L29,53 Q27,53 27,51 L27,47 Q27,45 29,45 Z" />
+    <!-- Corps -->
+    <path
+        android:fillColor="#FFF6EBD3"
+        android:pathData="M31,55 L77,55 L71,78 Q70.4,80 68.4,80 L39.6,80 Q37.6,80 37,78 Z" />
+    <!-- Lattes -->
+    <path
+        android:pathData="M46,60 L47,75 M54,60 L54,75 M62,60 L61,75"
+        android:strokeColor="#FF2F6B45"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+    <!-- Étiquette rabais -->
+    <path
+        android:fillColor="#FFFFD54A"
+        android:pathData="M73,24 m-9,0 a9,9 0,1 0,18 0 a9,9 0,1 0,-18 0" />
+    <path
+        android:pathData="M69.5,27.5 L76.5,20.5"
+        android:strokeColor="#FF2F6B45"
+        android:strokeWidth="2"
+        android:strokeLineCap="round" />
+</vector>

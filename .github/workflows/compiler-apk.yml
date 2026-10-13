@@ -1,0 +1,45 @@
+# Compile l'APK automatiquement à chaque envoi sur GitHub (ou à la demande).
+# Le fichier PanierFute-apk.zip apparaît dans l'onglet « Actions » > dernière exécution > Artifacts.
+name: Compiler l'APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Optionnel : clé de signature fixe, fournie par les secrets du dépôt
+      # (PANIER_KEYSTORE_B64 et PANIER_KEYSTORE_PASSWORD). Sans eux, l'APK est
+      # signé avec une clé de débogage différente à chaque compilation.
+      - name: Clé de signature
+        env:
+          KEYSTORE_B64: ${{ secrets.PANIER_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > app/panierfute.keystore
+          fi
+
+      - name: Compiler
+        env:
+          PANIER_KEYSTORE_PASSWORD: ${{ secrets.PANIER_KEYSTORE_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PanierFute-apk
+          path: app/build/outputs/apk/debug/*.apk
