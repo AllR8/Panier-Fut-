@@ -8,9 +8,11 @@ import java.time.ZonedDateTime
 
 data class ReponseIA(
     val contenu: String,
+    val coupee: Boolean,          // finish_reason = "length" : la limite de jetons a été atteinte
     val jetonsEntree: Int,
     val jetonsCache: Int,
     val jetonsSortie: Int,
+    val jetonsReflexion: Int,
     val coutUsd: Double
 )
 
@@ -28,13 +30,19 @@ object DeepSeek {
     private const val PRIX_ENTREE = 0.15
     private const val PRIX_SORTIE = 0.60
 
+    /**
+     * Un appel à l'IA. On ne paie que les jetons réellement générés : une limite
+     * [maxJetons] élevée ne coûte rien de plus, elle évite seulement une réponse coupée.
+     * [formatJson] = mode JSON strict de DeepSeek (désactivé pour un nouvel essai).
+     */
     fun completer(
         cle: String,
         modele: String,
         systeme: String,
         contenuUtilisateur: JSONArray,
         reflexion: Boolean,
-        maxJetons: Int = 16_000
+        maxJetons: Int,
+        formatJson: Boolean = true
     ): ReponseIA {
         val corps = JSONObject()
             .put("model", modele)
@@ -43,23 +51,22 @@ object DeepSeek {
                     .put(JSONObject().put("role", "system").put("content", systeme))
                     .put(JSONObject().put("role", "user").put("content", contenuUtilisateur))
             )
-            .put("response_format", JSONObject().put("type", "json_object"))
             .put("max_tokens", maxJetons)
             .put("stream", false)
-        if (!reflexion) {
-            // Mode réflexion désactivé : moins de jetons de sortie, donc moins cher.
-            corps.put("thinking", JSONObject().put("type", "disabled"))
-            corps.put("temperature", 0.7)
-        }
+        if (formatJson) corps.put("response_format", JSONObject().put("type", "json_object"))
+        // La réflexion est ACTIVÉE par défaut chez DeepSeek : on la désactive
+        // explicitement, sinon elle consomme des milliers de jetons de sortie.
+        corps.put("thinking", JSONObject().put("type", if (reflexion) "enabled" else "disabled"))
+        if (!reflexion) corps.put("temperature", 0.7)
 
         val entetes = mapOf("Authorization" to "Bearer $cle")
         val texte = try {
             Http.postJson(URL_CHAT, corps.toString(), entetes, lectureMs = 8 * 60_000)
         } catch (e: ErreurHttp) {
             if (e.code != 400 && e.code != 422) throw IOException(messageErreur(e), e)
-            // Paramètre optionnel refusé (mode json, réflexion…) : un essai avec la requête minimale.
+            // Paramètre optionnel refusé : nouvel essai sans le mode JSON ni la température
+            // (la réflexion reste désactivée).
             corps.remove("response_format")
-            corps.remove("thinking")
             corps.remove("temperature")
             try {
                 Http.postJson(URL_CHAT, corps.toString(), entetes, lectureMs = 8 * 60_000)
@@ -71,9 +78,7 @@ object DeepSeek {
         val rep = JSONObject(texte)
         val choix = rep.optJSONArray("choices").objets().firstOrNull()
             ?: throw IOException("Réponse DeepSeek sans contenu.")
-        if (choix.txt("finish_reason") == "length") {
-            throw IOException("La réponse de l'IA a été coupée (trop longue). Réessaie.")
-        }
+        val coupee = choix.txt("finish_reason") == "length"
         val contenu = choix.optJSONObject("message")?.txt("content") ?: ""
 
         val usage = rep.optJSONObject("usage") ?: JSONObject()
@@ -81,7 +86,16 @@ object DeepSeek {
         val cache = usage.entier("prompt_cache_hit_tokens")
         val horsCache = usage.nombre("prompt_cache_miss_tokens")?.toInt() ?: (entree - cache)
         val sortie = usage.entier("completion_tokens")
-        return ReponseIA(contenu, entree, cache, sortie, estimerCout(cache, horsCache, sortie))
+        val reflexionJetons = usage.optJSONObject("completion_tokens_details")?.entier("reasoning_tokens") ?: 0
+        return ReponseIA(
+            contenu = contenu,
+            coupee = coupee,
+            jetonsEntree = entree,
+            jetonsCache = cache,
+            jetonsSortie = sortie,
+            jetonsReflexion = reflexionJetons,
+            coutUsd = estimerCout(cache, horsCache, sortie)
+        )
     }
 
     /** Vérifie la clé et retourne le solde du compte (appel gratuit). */

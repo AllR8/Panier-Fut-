@@ -51,24 +51,28 @@ object GenerateurPlan {
         val systeme = construireSysteme(jours, r.marchand)
 
         progres("Analyse par l'IA… (1 à 3 minutes)")
-        var reponse = withContext(Dispatchers.IO) {
-            DeepSeek.completer(r.cleApi, r.modele, systeme, contenu, r.reflexion)
-        }
-        var cout = reponse.coutUsd
-        val premier = lireReponse(reponse.contenu)
-        val json: JSONObject
-        if (premier != null) {
-            json = premier
-        } else {
-            // Rare : contenu vide ou JSON invalide. Un seul nouvel essai.
-            progres("Réponse incomplète, nouvel essai…")
-            reponse = withContext(Dispatchers.IO) {
-                DeepSeek.completer(r.cleApi, r.modele, systeme, contenu, r.reflexion)
+        // Au plus deux essais. Le 2e (rare) a plus d'espace, demande d'être plus bref et,
+        // si le 1er a été coupé, se passe du mode JSON strict (qui peut boucler sur des espaces).
+        val tentatives = ArrayList<ReponseIA>()
+        var trouve: JSONObject? = null
+        for (essai in 1..2) {
+            val precedente = tentatives.lastOrNull()
+            if (precedente != null) {
+                progres(if (precedente.coupee) "Réponse trop longue, nouvel essai…" else "Réponse incomplète, nouvel essai…")
             }
-            cout += reponse.coutUsd
-            json = lireReponse(reponse.contenu)
-                ?: throw IllegalStateException("L'IA n'a pas renvoyé de plan lisible. Réessaie plus tard.")
+            val limite = if (essai == 1 && !r.reflexion) 32_000 else 64_000
+            val strict = precedente == null || !precedente.coupee
+            val consignes = if (precedente == null) systeme else systeme + RAPPEL_CONCIS
+            val rep = withContext(Dispatchers.IO) {
+                DeepSeek.completer(r.cleApi, r.modele, consignes, contenu, r.reflexion, limite, strict)
+            }
+            tentatives.add(rep)
+            trouve = if (rep.coupee) null else lireReponse(rep.contenu)
+            if (trouve != null) break
         }
+        val json = trouve ?: throw IllegalStateException(diagnostic(tentatives))
+        val reponse = tentatives.last()
+        val cout = tentatives.sumOf { it.coutUsd }
 
         progres("Enregistrement du plan…")
         val meta = JSONObject()
@@ -96,6 +100,22 @@ object GenerateurPlan {
         val plan = StockagePlan.charger(ctx)
             ?: throw IllegalStateException("Le plan reçu n'a pas pu être enregistré.")
         return ResultatGeneration.Succes(plan)
+    }
+
+    private const val RAPPEL_CONCIS = "\n\nIMPORTANT : ta réponse précédente était trop longue ou illisible. " +
+        "Sois bref : descriptions d'une phrase, 3 à 5 étapes courtes par repas, inventaire limité à 30 éléments."
+
+    /** Message d'erreur précis, pour savoir ce qui s'est passé si les deux essais échouent. */
+    private fun diagnostic(tentatives: List<ReponseIA>): String {
+        val d = tentatives.lastOrNull() ?: return "L'IA n'a pas répondu."
+        val detail = buildString {
+            if (d.coupee) append("réponse coupée après ${d.jetonsSortie} jetons")
+            else append("réponse illisible (${d.contenu.length} caractères)")
+            if (d.jetonsReflexion > 0) append(", dont ${d.jetonsReflexion} de réflexion")
+            if (d.contenu.isNotEmpty() && d.contenu.trim().length < d.contenu.length / 10) append(", surtout des espaces")
+        }
+        return "L'IA n'a pas renvoyé de plan complet après ${tentatives.size} essai(s) ($detail). " +
+            "Réessaie ; si ça recommence, envoie ce message à Claude."
     }
 
     private fun lireReponse(texte: String): JSONObject? {
@@ -172,13 +192,13 @@ Tu es « Panier Futé », un planificateur de repas et d'épicerie économe pour
 Tu reçois : des photos du garde-manger, du frigo et du congélateur ; la liste des ingrédients de base toujours disponibles ; les produits de la circulaire de l'épicier.
 
 Ta mission, en une seule réponse :
-1. INVENTAIRE — Liste ce que tu vois réellement sur les photos. N'invente rien. Si tu n'es pas certain d'un aliment, ajoute « (?) » à son nom. Marque utiliser_vite = true pour ce qui semble entamé, mûr ou périssable (légumes, restes, viande décongelée, produits laitiers ouverts). Ignore les ingrédients de base.
+1. INVENTAIRE — Liste ce que tu vois réellement sur les photos. N'invente rien. Si tu n'es pas certain d'un aliment, ajoute « (?) » à son nom. Marque utiliser_vite = true pour ce qui semble entamé, mûr ou périssable (légumes, restes, viande décongelée, produits laitiers ouverts). Ignore les ingrédients de base. Au plus 40 éléments : regroupe les petits articles (ex. « condiments variés »).
 2. REPAS — Planifie les repas demandés pour chacun des jours. Priorités, dans l'ordre : (a) utiliser ce qui doit être mangé vite, (b) profiter des produits en rabais de la circulaire, (c) utiliser le reste de l'inventaire, (d) acheter le moins possible au prix régulier.
    - Repas réalistes : 40 minutes ou moins en semaine, un peu plus élaborés la fin de semaine.
    - Varie les protéines et les styles ; pas deux fois le même plat.
    - Prévois des restes intelligents quand c'est logique (cuire plus, réutiliser le lendemain) et dis-le dans la description.
    - Les quantités doivent correspondre au nombre de portions.
-   - Étapes courtes et concrètes (4 à 7 étapes).
+   - 3 à 6 étapes d'une phrase chacune.
    - Le champ « jour » doit être exactement une de ces valeurs : ${jours.joinToString(" | ")}.
 3. ÉPICERIE — Seulement ce qui manque pour réaliser les repas (rien de l'inventaire suffisant, aucun ingrédient de base).
    - Regroupe chaque article dans un de ces rayons : Fruits et légumes | Boulangerie | Viandes et poissons | Produits laitiers et œufs | Épicerie | Surgelés | Autres.
@@ -188,7 +208,7 @@ Ta mission, en une seule réponse :
    - Un produit non périssable ou congelable en très bon rabais peut être acheté en plus pour faire des réserves : mentionne-le dans remarques.
 4. Ignore les produits non alimentaires de la circulaire.
 
-Réponds UNIQUEMENT avec un objet json valide, sans texte autour, selon ce schéma :
+Sois concis : pas de texte superflu. Réponds UNIQUEMENT avec un objet json valide, sans texte autour, selon ce schéma :
 {
   "resume": "Deux phrases sur la stratégie de la semaine.",
   "inventaire": [
@@ -199,7 +219,7 @@ Réponds UNIQUEMENT avec un objet json valide, sans texte autour, selon ce sché
       "jour": "${jours.first()}",
       "moment": "souper",
       "nom": "Nom appétissant du plat",
-      "description": "Une ou deux phrases. Mentionne les restes prévus s'il y a lieu.",
+      "description": "Une phrase. Mentionne les restes prévus s'il y a lieu.",
       "portions": 2,
       "temps_min": 35,
       "ingredients": [
@@ -208,8 +228,7 @@ Réponds UNIQUEMENT avec un objet json valide, sans texte autour, selon ce sché
         {"nom": "paprika", "quantite": "1 c. à thé", "source": "base"},
         {"nom": "crème sure", "quantite": "125 ml", "source": "achat"}
       ],
-      "etapes": ["Étape courte.", "Étape courte."],
-      "rabais_utilises": ["CAROTTES, SAC DE 3 LB"]
+      "etapes": ["Étape courte.", "Étape courte."]
     }
   ],
   "epicerie": [

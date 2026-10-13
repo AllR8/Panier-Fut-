@@ -248,7 +248,7 @@ private fun CarteRepas(r: Repas) {
                     color = MaterialTheme.colorScheme.secondary,
                     modifier = Modifier.weight(1f)
                 )
-                if (r.rabaisUtilises.isNotEmpty()) PastilleRabais()
+                if (r.rabaisUtilises.isNotEmpty() || r.ingredients.any { it.source == "rabais" }) PastilleRabais()
                 Icon(
                     if (ouvert) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
                     contentDescription = if (ouvert) "Réduire" else "Voir la recette"
