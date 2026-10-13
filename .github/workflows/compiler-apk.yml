@@ -10,15 +10,14 @@ jobs:
   apk:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
-
+      # Le SDK Android est déjà installé sur les machines de GitHub (ANDROID_HOME).
       - uses: gradle/actions/setup-gradle@v4
 
       # Optionnel : clé de signature fixe, fournie par les secrets du dépôt
@@ -36,8 +35,23 @@ jobs:
         env:
           PANIER_KEYSTORE_PASSWORD: ${{ secrets.PANIER_KEYSTORE_PASSWORD }}
         run: |
+          set -o pipefail
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug --stacktrace --no-daemon 2>&1 | tee build.log
+
+      # En cas d'échec : résume les erreurs en annotations (visibles sur la page de l'exécution).
+      - name: Résumé des erreurs
+        if: failure()
+        run: |
+          [ -f build.log ] || exit 0
+          esc() { sed -e 's/%/%25/g' -e 's/\r//g' | sed ':a;N;$!ba;s/\n/%0A/g'; }
+          k=$(grep -E "^e: " build.log | head -60 | esc)
+          [ -n "$k" ] && echo "::error title=Erreurs Kotlin::$k"
+          a=$(grep -iE "AAPT|error: resource|Android resource linking failed|ERROR:" build.log | head -30 | esc)
+          [ -n "$a" ] && echo "::error title=Erreurs ressources::$a"
+          g=$(awk '/What went wrong/{f=1} f{print} /^\* Try:/{f=0}' build.log | head -60 | esc)
+          [ -n "$g" ] && echo "::error title=Gradle::$g"
+          exit 0
 
       - uses: actions/upload-artifact@v4
         with:
