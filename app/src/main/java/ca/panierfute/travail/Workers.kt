@@ -40,6 +40,7 @@ class GenerationWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
 
     companion object {
         const val CLE_MANUEL = "manuel"
+        const val CLE_CONSIGNES = "consignes"
         const val CLE_ETAPE = "etape"
         private const val SEMAINE_MS = 7L * 24 * 3600 * 1000
     }
@@ -48,6 +49,7 @@ class GenerationWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
         val ctx = applicationContext
         val r = Reglages(ctx)
         val manuel = inputData.getBoolean(CLE_MANUEL, false)
+        val consignes = inputData.getString(CLE_CONSIGNES) ?: ""
         var replanifier = !manuel
 
         try {
@@ -58,7 +60,7 @@ class GenerationWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
                 if (r.derniereGenerationMs > seuil) return Result.success()
             }
 
-            val resultat = GenerateurPlan.generer(ctx, manuel) { etape ->
+            val resultat = GenerateurPlan.generer(ctx, manuel, consignes) { etape ->
                 setProgress(workDataOf(CLE_ETAPE to etape))
             }
             when (resultat) {
@@ -70,7 +72,7 @@ class GenerationWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
                     } ?: ""
                     Notifs.planPret(
                         ctx,
-                        "${p.repas.size} repas planifiés, ${p.epicerie.size} articles à acheter (≈ $total \$).$economies"
+                        "${p.repas.size} repas planifiés, ${p.epicerie.size} articles à acheter (≈ $total \$ taxes incluses).$economies"
                     )
                 }
                 is ResultatGeneration.Ignore -> {

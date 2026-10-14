@@ -104,9 +104,14 @@ object Planificateur {
     }
 
     /** Génération lancée à la main (bouton « Générer maintenant »). */
-    fun lancerManuel(ctx: Context) {
+    fun lancerManuel(ctx: Context, consignes: String = "") {
         val req = OneTimeWorkRequestBuilder<GenerationWorker>()
-            .setInputData(workDataOf(GenerationWorker.CLE_MANUEL to true))
+            .setInputData(
+                workDataOf(
+                    GenerationWorker.CLE_MANUEL to true,
+                    GenerationWorker.CLE_CONSIGNES to consignes.take(2000)
+                )
+            )
             .setConstraints(reseau())
             .addTag(TAG_GENERATION)
             .addTag(TAG_MANUEL)

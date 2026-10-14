@@ -27,6 +27,7 @@ object GenerateurPlan {
     suspend fun generer(
         ctx: Context,
         manuel: Boolean,
+        consignes: String = "",
         progres: suspend (String) -> Unit
     ): ResultatGeneration {
         val r = Reglages(ctx)
@@ -38,6 +39,15 @@ object GenerateurPlan {
             return ResultatGeneration.Ignore("Aucune photo reçue cette semaine.")
         }
 
+        // Régénération manuelle sans nouvelles photos : on réutilise l'inventaire du plan
+        // actuel (avec les corrections de l'utilisateur) au lieu de repartir de zéro.
+        val planActuel = if (manuel) {
+            withContext(Dispatchers.IO) { StockagePlan.charger(ctx) }
+                ?.takeIf { System.currentTimeMillis() - it.genereLe < 7L * 24 * 3600 * 1000 }
+        } else null
+        val inventaireConnu = if (photos.isEmpty()) planActuel?.inventaire?.takeIf { it.isNotEmpty() } else null
+        val repasRemplaces = planActuel?.repas?.map { it.nom }.orEmpty()
+
         progres("Lecture de la circulaire ${r.marchand}…")
         val circulaire = withContext(Dispatchers.IO) { SourceCirculaire.charger(r.codePostal, r.marchand) }
 
@@ -46,8 +56,10 @@ object GenerateurPlan {
         val debut = if (maintenant.hour < 14) maintenant.toLocalDate() else maintenant.toLocalDate().plusDays(1)
         val jours = (0L until 7L).map { debut.plusDays(it).format(FORMAT_JOUR) }
 
-        progres("Préparation de ${photos.size} photo(s)…")
-        val contenu = withContext(Dispatchers.IO) { construireContenu(r, circulaire, photos, jours, maintenant) }
+        progres(if (photos.isEmpty()) "Préparation de la demande…" else "Préparation de ${photos.size} photo(s)…")
+        val contenu = withContext(Dispatchers.IO) {
+            construireContenu(r, circulaire, photos, jours, maintenant, inventaireConnu, consignes.trim(), repasRemplaces)
+        }
         val systeme = construireSysteme(jours, r.marchand)
 
         progres("Analyse par l'IA… (1 à 3 minutes)")
@@ -62,9 +74,9 @@ object GenerateurPlan {
             }
             val limite = if (essai == 1 && !r.reflexion) 32_000 else 64_000
             val strict = precedente == null || !precedente.coupee
-            val consignes = if (precedente == null) systeme else systeme + RAPPEL_CONCIS
+            val instructions = if (precedente == null) systeme else systeme + RAPPEL_CONCIS
             val rep = withContext(Dispatchers.IO) {
-                DeepSeek.completer(r.cleApi, r.modele, consignes, contenu, r.reflexion, limite, strict)
+                DeepSeek.completer(r.cleApi, r.modele, instructions, contenu, r.reflexion, limite, strict)
             }
             tentatives.add(rep)
             trouve = if (rep.coupee) null else lireReponse(rep.contenu)
@@ -75,6 +87,12 @@ object GenerateurPlan {
         val cout = tentatives.sumOf { it.coutUsd }
 
         progres("Enregistrement du plan…")
+        if (inventaireConnu != null) {
+            // L'inventaire confirmé par l'utilisateur reste la référence.
+            val tableau = JSONArray()
+            inventaireConnu.forEach { tableau.put(it.versJson()) }
+            json.put("inventaire", tableau)
+        }
         val meta = JSONObject()
             .put("genere_le", System.currentTimeMillis())
             .put("debut_plan", debut.toString())
@@ -86,13 +104,16 @@ object GenerateurPlan {
             .put("jetons_entree", reponse.jetonsEntree)
             .put("jetons_sortie", reponse.jetonsSortie)
             .put("modele", r.modele)
+            .put("consignes", consignes.trim())
+            .put("inventaire_corrige", inventaireConnu != null && planActuel?.inventaireCorrige == true)
         withContext(Dispatchers.IO) {
             StockagePlan.sauver(ctx, meta, json)
             Photos.viderTout(ctx) // les photos ont été analysées : on repart à neuf la semaine prochaine
         }
 
         val nouveauxRepas = json.optJSONArray("repas").objets().map { it.txt("nom") }.filter { it.isNotBlank() }
-        r.repasRecents = (nouveauxRepas + r.repasRecents).distinct().take(28)
+        // Les repas remplacés par une régénération n'ont pas été mangés : on les retire de l'historique.
+        r.repasRecents = (nouveauxRepas + r.repasRecents.filter { it !in repasRemplaces }).distinct().take(28)
         r.derniereGenerationMs = System.currentTimeMillis()
         r.coches = emptySet()
         r.derniereErreur = ""
@@ -133,7 +154,10 @@ object GenerateurPlan {
         c: Circulaire,
         photos: List<Pair<Zone, java.io.File>>,
         jours: List<String>,
-        maintenant: LocalDateTime
+        maintenant: LocalDateTime,
+        inventaireConnu: List<ItemInventaire>?,
+        consignes: String,
+        repasRemplaces: List<String>
     ): JSONArray {
         val moments = buildList {
             if (r.dejeuners) add("déjeuner")
@@ -153,9 +177,17 @@ object GenerateurPlan {
             appendLine("Portions par repas : ${r.portions}.")
             val pref = r.preferences.trim()
             appendLine("Préférences et contraintes du ménage : ${if (pref.isEmpty()) "aucune particulière" else pref}.")
-            val recents = r.repasRecents.take(14)
+            val recents = r.repasRecents.filter { it !in repasRemplaces }.take(14)
             if (recents.isNotEmpty()) {
                 appendLine("Repas des semaines précédentes (ne pas les répéter) : ${recents.joinToString(" ; ")}.")
+            }
+            if (repasRemplaces.isNotEmpty()) {
+                appendLine("PLAN ACTUEL DE CETTE SEMAINE, que l'utilisateur veut remplacer par une nouvelle version (garde un de ces repas seulement si ses consignes le demandent) : ${repasRemplaces.joinToString(" ; ")}.")
+            }
+            if (consignes.isNotEmpty()) {
+                appendLine()
+                appendLine("CONSIGNES DE L'UTILISATEUR POUR CETTE VERSION (prioritaires sur tout le reste, sauf les allergies) :")
+                appendLine(consignes)
             }
             appendLine()
             appendLine("INGRÉDIENTS DE BASE toujours disponibles (utilise-les librement ; ne les mets jamais dans l'épicerie ni dans l'inventaire) :")
@@ -164,7 +196,12 @@ object GenerateurPlan {
             appendLine("CIRCULAIRE ${c.marchand.uppercase(FR)} (succursale du code postal ${r.codePostal}) $periode. L'épicerie sera faite avant la fin de la circulaire. Format : nom | prix | précisions.")
             append(c.enTexte())
             appendLine()
-            if (photos.isEmpty()) {
+            if (inventaireConnu != null) {
+                appendLine("INVENTAIRE CONFIRMÉ ET CORRIGÉ PAR L'UTILISATEUR (fiable : utilise-le tel quel) :")
+                inventaireConnu.forEach { appendLine(it.enTexte()) }
+                appendLine()
+                appendLine("PHOTOS : aucune nouvelle photo. Base-toi sur l'inventaire ci-dessus et renvoie \"inventaire\": [] (il est déjà connu).")
+            } else if (photos.isEmpty()) {
                 appendLine("PHOTOS : aucune cette semaine. Suppose qu'il n'y a que les ingrédients de base ; l'inventaire sera vide.")
             } else {
                 appendLine("PHOTOS : ${photos.size} photo(s) suivent, chacune précédée de sa zone (garde-manger, frigo ou congélateur).")
@@ -189,7 +226,7 @@ object GenerateurPlan {
     private fun construireSysteme(jours: List<String>, marchand: String): String = """
 Tu es « Panier Futé », un planificateur de repas et d'épicerie économe pour un ménage de la ville de Québec. Tu écris en français québécois naturel et tu utilises les unités métriques (sauf si la circulaire indique des livres).
 
-Tu reçois : des photos du garde-manger, du frigo et du congélateur ; la liste des ingrédients de base toujours disponibles ; les produits de la circulaire de l'épicier.
+Tu reçois : des photos du garde-manger, du frigo et du congélateur (ou un inventaire déjà confirmé par l'utilisateur) ; la liste des ingrédients de base toujours disponibles ; les produits de la circulaire de l'épicier ; parfois des consignes ponctuelles de l'utilisateur.
 
 Ta mission, en une seule réponse :
 1. INVENTAIRE — Liste ce que tu vois réellement sur les photos. N'invente rien. Si tu n'es pas certain d'un aliment, ajoute « (?) » à son nom. Marque utiliser_vite = true pour ce qui semble entamé, mûr ou périssable (légumes, restes, viande décongelée, produits laitiers ouverts). Ignore les ingrédients de base. Au plus 40 éléments : regroupe les petits articles (ex. « condiments variés »).
@@ -204,7 +241,8 @@ Ta mission, en une seule réponse :
    - Regroupe chaque article dans un de ces rayons : Fruits et légumes | Boulangerie | Viandes et poissons | Produits laitiers et œufs | Épicerie | Surgelés | Autres.
    - Si l'article est dans la circulaire : en_rabais = true, prix_unitaire = le prix de la circulaire, et nomme l'article comme dans la circulaire (en minuscules lisibles).
    - Sinon : en_rabais = false, estime un prix réaliste chez $marchand à Québec et mets prix_estime = true.
-   - cout = coût total pour la quantité à acheter (prix_unitaire × nombre d'unités).
+   - cout = coût total pour la quantité à acheter (prix_unitaire × nombre d'unités), avant taxes.
+   - taxable = true seulement pour ce qui est taxé au Québec (TPS + TVQ) : boissons gazeuses, eau pétillante, bonbons et confiseries, croustilles et grignotines, alcool, produits non alimentaires. Les aliments de base (fruits, légumes, viande, poisson, œufs, pain, produits laitiers, céréales, pâtes, riz, conserves, etc.) sont détaxés : taxable = false.
    - Un produit non périssable ou congelable en très bon rabais peut être acheté en plus pour faire des réserves : mentionne-le dans remarques.
 4. Ignore les produits non alimentaires de la circulaire.
 
@@ -232,7 +270,7 @@ Sois concis : pas de texte superflu. Réponds UNIQUEMENT avec un objet json vali
     }
   ],
   "epicerie": [
-    {"article": "Carottes, sac de 3 lb", "quantite": "1 sac", "rayon": "Fruits et légumes", "en_rabais": true, "prix_unitaire": 2.49, "cout": 2.49, "prix_estime": false, "pour": ["samedi souper", "mardi souper"]}
+    {"article": "Carottes, sac de 3 lb", "quantite": "1 sac", "rayon": "Fruits et légumes", "en_rabais": true, "prix_unitaire": 2.49, "cout": 2.49, "prix_estime": false, "taxable": false, "pour": ["samedi souper", "mardi souper"]}
   ],
   "economies_estimees": 12.50,
   "remarques": ["Conseil ou mise en garde utile (photo floue, achat à stocker, etc.)."]

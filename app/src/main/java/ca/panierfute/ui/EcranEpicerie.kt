@@ -77,8 +77,13 @@ fun EcranEpicerie(vm: AppViewModel) {
                 Column(Modifier.padding(16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("Total estimé", style = MaterialTheme.typography.labelLarge)
+                            Text("Total estimé, taxes incluses", style = MaterialTheme.typography.labelLarge)
                             Text(argent(plan.totalEstime), style = MaterialTheme.typography.headlineMedium)
+                            Text(
+                                "Sous-total ${argent(plan.sousTotal)} + TPS/TVQ ${argent(plan.taxes)}" +
+                                    (if (plan.nbTaxables > 0) " (${plan.nbTaxables} article(s) taxable(s))" else ""),
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                         FilledTonalButton(onClick = { partager(ctx, plan, vm.reglages.marchand) }) {
                             Icon(Icons.Filled.Share, contentDescription = null)
@@ -157,6 +162,9 @@ private fun LigneArticle(a: ArticleEpicerie, coche: Boolean, basculer: () -> Uni
                     fontWeight = if (a.enRabais) FontWeight.Bold else FontWeight.Normal
                 )
             }
+            if (a.taxable) {
+                Text("+ taxes", style = MaterialTheme.typography.labelSmall, color = attenue)
+            }
             if (a.enRabais) PastilleRabais()
         }
     }
@@ -175,10 +183,13 @@ private fun partager(ctx: android.content.Context, plan: Plan, marchand: String)
                 if (a.quantite.isNotBlank()) append(" — ").append(a.quantite)
                 val prix = a.cout ?: a.prixUnitaire
                 if (prix != null) append(" — ").append(if (a.prixEstime) "≈ " else "").append(argent(prix))
+                if (a.taxable) append(" (+tx)")
                 if (a.enRabais) append(" 🏷️")
                 append("\n")
             }
         }
+        append("\nSous-total : ").append(argent(plan.sousTotal))
+        append("\nTPS + TVQ : ").append(argent(plan.taxes))
         append("\nTotal estimé : ").append(argent(plan.totalEstime))
     }
     val envoi = Intent(Intent.ACTION_SEND).apply {

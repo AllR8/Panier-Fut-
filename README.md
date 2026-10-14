@@ -13,6 +13,12 @@ Application Android (Samsung Galaxy) qui, une fois par semaine :
 
 Tu peux aussi lancer la génération à la main, à tout moment (bouton **Générer mon plan maintenant**).
 
+Une fois le plan généré, l'onglet **Semaine** permet aussi :
+- de **corriger l'inventaire** que l'IA a vu chez toi (modifier, ajouter ou retirer un aliment) ;
+- de **régénérer le plan** avec de nouvelles préférences (ex. « plus végé, pas de porc »), pour cette fois seulement ou pour les semaines suivantes. Sans nouvelles photos, la régénération repart de l'inventaire corrigé.
+
+Le total de l'épicerie inclut une estimation des **taxes (TPS + TVQ, 14,975 %)**, calculées seulement sur les articles taxables. Au Québec, la plupart des aliments de base sont détaxés ; les taxes visent surtout les boissons gazeuses, bonbons, grignotines, alcool et produits non alimentaires.
+
 ## Coût
 
 Le modèle `deepseek-flash` lit directement les images. Un plan typique (≈ 10 photos + ≈ 300 articles de circulaire) consomme environ 15 000 jetons en entrée et 5 000 en sortie.

@@ -1,8 +1,13 @@
 package ca.panierfute.data
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+
+/** TPS (5 %) + TVQ (9,975 %). Au Québec, les aliments de base sont détaxés :
+ *  les taxes ne s'appliquent qu'aux articles marqués « taxable ». */
+const val TAUX_TAXES = 0.14975
 
 data class IngredientRepas(val nom: String, val quantite: String, val source: String)
 
@@ -27,10 +32,27 @@ data class ArticleEpicerie(
     val prixUnitaire: Double?,
     val cout: Double?,
     val prixEstime: Boolean,
+    val taxable: Boolean,
     val pour: List<String>
-)
+) {
+    val montant: Double get() = cout ?: prixUnitaire ?: 0.0
+}
 
-data class ItemInventaire(val nom: String, val zone: String, val quantite: String, val utiliserVite: Boolean)
+data class ItemInventaire(val nom: String, val zone: String, val quantite: String, val utiliserVite: Boolean) {
+    fun versJson(): JSONObject = JSONObject()
+        .put("nom", nom)
+        .put("zone", zone)
+        .put("quantite", quantite)
+        .put("utiliser_vite", utiliserVite)
+
+    /** Ligne lisible envoyée à l'IA. */
+    fun enTexte(): String = buildString {
+        append("- ").append(nom)
+        if (quantite.isNotBlank()) append(" — ").append(quantite)
+        if (zone.isNotBlank()) append(" (").append(zone).append(")")
+        if (utiliserVite) append(" [à utiliser vite]")
+    }
+}
 
 data class Plan(
     val genereLe: Long,
@@ -47,9 +69,15 @@ data class Plan(
     val epicerie: List<ArticleEpicerie>,
     val inventaire: List<ItemInventaire>,
     val economiesEstimees: Double?,
-    val remarques: List<String>
+    val remarques: List<String>,
+    val inventaireCorrige: Boolean,
+    val consignes: String
 ) {
-    val totalEstime: Double get() = epicerie.sumOf { it.cout ?: it.prixUnitaire ?: 0.0 }
+    val sousTotal: Double get() = epicerie.sumOf { it.montant }
+    val taxes: Double get() = epicerie.filter { it.taxable }.sumOf { it.montant } * TAUX_TAXES
+    /** Total estimé, taxes incluses. */
+    val totalEstime: Double get() = sousTotal + taxes
+    val nbTaxables: Int get() = epicerie.count { it.taxable }
 }
 
 /** Ordre des rayons (proche d'un parcours d'épicerie typique). */
@@ -75,6 +103,20 @@ object StockagePlan {
             dest.writeText(tmp.readText(Charsets.UTF_8), Charsets.UTF_8)
             tmp.delete()
         }
+    }
+
+    /** Remplace l'inventaire du plan courant (corrections de l'utilisateur). */
+    fun majInventaire(ctx: Context, items: List<ItemInventaire>) {
+        val f = fichier(ctx)
+        if (!f.exists()) return
+        val racine = JSONObject(f.readText(Charsets.UTF_8))
+        val meta = racine.optJSONObject("meta") ?: JSONObject()
+        val ia = racine.optJSONObject("ia") ?: JSONObject()
+        val tableau = JSONArray()
+        items.forEach { tableau.put(it.versJson()) }
+        ia.put("inventaire", tableau)
+        meta.put("inventaire_corrige", true)
+        sauver(ctx, meta, ia)
     }
 
     fun charger(ctx: Context): Plan? {
@@ -117,6 +159,7 @@ object StockagePlan {
                 prixUnitaire = a.nombre("prix_unitaire") ?: a.nombre("prix"),
                 cout = a.nombre("cout"),
                 prixEstime = a.booleen("prix_estime"),
+                taxable = a.booleen("taxable"),
                 pour = a.optJSONArray("pour").textes()
             )
         }
@@ -140,7 +183,9 @@ object StockagePlan {
             epicerie = epicerie,
             inventaire = inventaire,
             economiesEstimees = ia.nombre("economies_estimees"),
-            remarques = ia.optJSONArray("remarques").textes()
+            remarques = ia.optJSONArray("remarques").textes(),
+            inventaireCorrige = meta.booleen("inventaire_corrige"),
+            consignes = meta.txt("consignes")
         )
     }
 }

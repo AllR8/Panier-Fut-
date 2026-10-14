@@ -11,6 +11,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import ca.panierfute.data.DeepSeek
 import ca.panierfute.data.EtatReglages
+import ca.panierfute.data.ItemInventaire
 import ca.panierfute.data.Photos
 import ca.panierfute.data.Plan
 import ca.panierfute.data.Reglages
@@ -109,16 +110,51 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- Génération ----------
 
-    fun generer() {
+    /**
+     * Lance une génération manuelle.
+     * [consignes] : précisions pour cette version seulement (ex. « plus végé cette semaine »).
+     * [garder] : les ajoute aussi aux préférences permanentes.
+     */
+    fun generer(consignes: String = "", garder: Boolean = false) {
         if (reglages.cleApi.isBlank()) {
             message = "Ajoute d'abord ta clé API DeepSeek."
             onglet = Onglet.REGLAGES
             return
         }
+        val texte = consignes.trim()
+        if (garder && texte.isNotEmpty()) {
+            maj { e ->
+                val avant = e.preferences.trim()
+                e.copy(preferences = if (avant.isEmpty()) texte else "$avant\n$texte")
+            }
+        }
         stockage.derniereErreur = ""
         erreur = ""
-        Planificateur.lancerManuel(ctx)
+        Planificateur.lancerManuel(ctx, texte)
         message = "Génération lancée. Tu peux fermer l'app : tu recevras une notification."
+    }
+
+    // ---------- Inventaire (« ce que l'IA a vu chez toi ») ----------
+
+    private fun modifierInventaire(transformation: (List<ItemInventaire>) -> List<ItemInventaire>) {
+        val actuel = plan?.inventaire ?: return
+        val nouveau = transformation(actuel)
+        viewModelScope.launch {
+            plan = withContext(Dispatchers.IO) {
+                StockagePlan.majInventaire(ctx, nouveau)
+                StockagePlan.charger(ctx)
+            }
+        }
+    }
+
+    fun ajouterAliment(item: ItemInventaire) = modifierInventaire { it + item }
+
+    fun remplacerAliment(index: Int, item: ItemInventaire) = modifierInventaire { liste ->
+        liste.mapIndexed { i, ancien -> if (i == index) item else ancien }
+    }
+
+    fun retirerAliment(index: Int) = modifierInventaire { liste ->
+        liste.filterIndexed { i, _ -> i != index }
     }
 
     // ---------- Épicerie ----------
