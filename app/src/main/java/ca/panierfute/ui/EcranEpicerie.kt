@@ -149,9 +149,9 @@ private fun LigneArticle(a: ArticleEpicerie, coche: Boolean, t: Textes, langue: 
                 textDecoration = if (coche) TextDecoration.LineThrough else null,
                 color = if (coche) c.encreDouce else c.encre
             )
-            val details = listOf(a.quantite, a.pour.joinToString(", ")).filter { it.isNotBlank() }
-            if (details.isNotEmpty()) {
-                Text(details.joinToString("  /  "), style = P.t.petit, color = c.encreDouce)
+            val details = t.quantitePour(a.quantite, a.pour)
+            if (details.isNotBlank()) {
+                Text(details, style = P.t.petit, color = c.encreDouce)
             }
         }
         Spacer(Modifier.width(10.dp))

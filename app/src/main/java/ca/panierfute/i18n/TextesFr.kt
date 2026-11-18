@@ -156,6 +156,7 @@ object TextesFr : Textes(Langue.FR) {
     override fun taxes(montant: String, pourcentage: Double, nbTaxables: Int) =
         "Taxes à ${pourcent(pourcentage)} : $montant, sur $nbTaxables " + pl(nbTaxables, "article taxable", "articles taxables")
     override fun dansLePanier(faits: Int, total: Int) = "$faits sur $total dans le panier"
+    override val motPour = "pour"
     override val partager = "Partager"
     override val partagerListe = "Partager la liste d'épicerie"
     override val toutDecocher = "Tout décocher"

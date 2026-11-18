@@ -136,6 +136,17 @@ abstract class Textes(val langue: Langue) {
     abstract fun sousTotal(montant: String): String
     abstract fun taxes(montant: String, pourcentage: Double, nbTaxables: Int): String
     abstract fun dansLePanier(faits: Int, total: Int): String
+    abstract val motPour: String
+
+    /** « 3, pour ven. souper » : quantité et repas qui utilisent l'article. */
+    fun quantitePour(quantite: String, pour: List<String>): String {
+        val p = pour.filter { it.isNotBlank() }.joinToString(", ")
+        return when {
+            p.isEmpty() -> quantite
+            quantite.isBlank() -> "$motPour $p".replaceFirstChar { it.uppercase() }
+            else -> "$quantite, $motPour $p"
+        }
+    }
     abstract val partager: String
     abstract val partagerListe: String
     abstract val toutDecocher: String

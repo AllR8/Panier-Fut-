@@ -5,10 +5,20 @@ import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.activity.result.ActivityResultRegistry
 import androidx.activity.result.ActivityResultRegistryOwner
 import androidx.activity.result.contract.ActivityResultContract
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.core.app.ActivityOptionsCompat
 import app.cash.paparazzi.DeviceConfig
 import app.cash.paparazzi.Paparazzi
@@ -50,20 +60,27 @@ class CapturesTest {
         theme = "android:Theme.Material.Light.NoActionBar"
     )
 
-    private fun capture(nom: String, ui: EtatApp, sombre: Boolean = false, longue: Boolean = false) {
-        paparazzi.unsafeUpdateConfig(
-            deviceConfig = if (longue) DeviceConfig.PIXEL_5.copy(screenHeight = 7600) else DeviceConfig.PIXEL_5
-        )
-        paparazzi.snapshot(nom) {
-            CompositionLocalProvider(LocalActivityResultRegistryOwner provides FauxRegistre) {
-                ThemePanier(sombre = sombre) { EcranPrincipal(ui) }
+    /**
+     * Une capture par écran. Avec pages > 1, l'écran est rendu en hauteur
+     * (sans défilement) puis découpé en plusieurs captures qui se chevauchent :
+     * Paparazzi réduit toute image à 1000 px de haut, une seule capture très
+     * haute serait illisible.
+     */
+    private fun capture(nom: String, ui: EtatApp, sombre: Boolean = false, pages: Int = 1) {
+        for (page in 0 until pages) {
+            paparazzi.snapshot(if (pages == 1) nom else "${nom}_${page + 1}") {
+                CompositionLocalProvider(LocalActivityResultRegistryOwner provides FauxRegistre) {
+                    ThemePanier(sombre = sombre) {
+                        if (pages == 1) EcranPrincipal(ui) else Fenetre(page, pages) { EcranPrincipal(ui) }
+                    }
+                }
             }
         }
     }
 
     @Test fun semaine() {
         capture("semaine_fr", Demo(Langue.FR))
-        capture("semaine_fr_complete", Demo(Langue.FR), longue = true)
+        capture("semaine_fr_complete", Demo(Langue.FR), pages = 3)
         capture("semaine_en", Demo(Langue.EN))
         capture("semaine_es", Demo(Langue.ES))
         capture("semaine_fr_sombre", Demo(Langue.FR), sombre = true)
@@ -76,17 +93,35 @@ class CapturesTest {
 
     @Test fun epicerie() {
         capture("epicerie_fr", Demo(Langue.FR, onglet = Onglet.EPICERIE))
-        capture("epicerie_fr_complete", Demo(Langue.FR, onglet = Onglet.EPICERIE), longue = true)
+        capture("epicerie_fr_complete", Demo(Langue.FR, onglet = Onglet.EPICERIE), pages = 3)
         capture("epicerie_en_sombre", Demo(Langue.EN, onglet = Onglet.EPICERIE), sombre = true)
     }
 
     @Test fun photos() {
-        capture("photos_fr", Demo(Langue.FR, onglet = Onglet.PHOTOS), longue = true)
+        capture("photos_fr", Demo(Langue.FR, onglet = Onglet.PHOTOS), pages = 2)
     }
 
     @Test fun reglages() {
-        capture("reglages_fr_complete", Demo(Langue.FR, onglet = Onglet.REGLAGES), longue = true)
+        capture("reglages_fr_complete", Demo(Langue.FR, onglet = Onglet.REGLAGES), pages = 5)
         capture("reglages_en", Demo(Langue.EN, onglet = Onglet.REGLAGES))
+    }
+}
+
+/**
+ * Montre la page n d'un écran rendu sur (pages) hauteurs d'écran, avec 15 % de
+ * chevauchement entre deux pages.
+ */
+@Composable
+private fun Fenetre(page: Int, pages: Int, contenu: @Composable () -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxSize().clipToBounds()) {
+        val ecran = maxHeight
+        val pas = ecran * 0.85f
+        Box(
+            Modifier
+                .wrapContentHeight(Alignment.Top, unbounded = true)
+                .requiredHeight(pas * (pages - 1) + ecran)
+                .offset(y = -(pas * page))
+        ) { contenu() }
     }
 }
 
