@@ -4,30 +4,115 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.text.Normalizer
+import java.time.LocalDate
 
-/** TPS (5 %) + TVQ (9,975 %). Au Québec, les aliments de base sont détaxés :
- *  les taxes ne s'appliquent qu'aux articles marqués « taxable ». */
-const val TAUX_TAXES = 0.14975
+/** Taux par défaut des anciens plans (Québec : TPS 5 % + TVQ 9,975 %). */
+private const val TAUX_TAXES_ANCIEN = 0.14975
 
-data class IngredientRepas(val nom: String, val quantite: String, val source: String)
+/** Texte en minuscules sans accents, pour reconnaître les valeurs renvoyées par l'IA. */
+private fun simplifier(s: String): String =
+    Normalizer.normalize(s.trim().lowercase(), Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "")
+
+/** D'où vient un ingrédient d'une recette. */
+enum class Source {
+    STOCK, RABAIS, BASE, ACHAT;
+
+    companion object {
+        fun depuis(s: String): Source {
+            val v = simplifier(s)
+            return when {
+                v.startsWith("inv") || v.startsWith("stock") || v.startsWith("home") -> STOCK
+                v.startsWith("rabais") || v.startsWith("sale") || v.startsWith("special") || v.startsWith("promo") -> RABAIS
+                v.startsWith("base") || v.startsWith("basic") || v.startsWith("staple") -> BASE
+                else -> ACHAT
+            }
+        }
+    }
+}
+
+/** Moment de la journée. */
+enum class Moment(val code: String) {
+    DEJEUNER("breakfast"), DINER("lunch"), SOUPER("dinner");
+
+    companion object {
+        fun depuis(s: String): Moment {
+            val v = simplifier(s)
+            return when {
+                v.startsWith("breakfast") || v.startsWith("dejeuner") || v.startsWith("desayuno") -> DEJEUNER
+                v.startsWith("lunch") || v.startsWith("diner") || v.startsWith("almuerzo") || v.startsWith("comida") -> DINER
+                else -> SOUPER
+            }
+        }
+    }
+}
+
+/** Rayons, dans l'ordre d'un parcours d'épicerie typique. */
+enum class Rayon(val code: String) {
+    FRUITS_LEGUMES("produce"),
+    BOULANGERIE("bakery"),
+    VIANDES("meat_fish"),
+    LAITIERS("dairy_eggs"),
+    EPICERIE("pantry"),
+    SURGELES("frozen"),
+    AUTRES("other");
+
+    companion object {
+        fun depuis(s: String): Rayon {
+            val v = simplifier(s)
+            entries.firstOrNull { it.code == v }?.let { return it }
+            return when {
+                // « Produits laitiers » avant « produce » : les deux commencent par « produ ».
+                v.contains("laitier") || v.startsWith("dairy") || v.startsWith("lacteo") -> LAITIERS
+                v.startsWith("fruit") || v.startsWith("produ") || v.contains("legume") -> FRUITS_LEGUMES
+                v.startsWith("boulang") || v.startsWith("bake") || v.startsWith("panad") -> BOULANGERIE
+                v.startsWith("viande") || v.startsWith("meat") || v.startsWith("carne") || v.contains("poisson") -> VIANDES
+                v.startsWith("epicerie") || v.startsWith("pantry") || v.startsWith("despensa") || v.startsWith("grocery") -> EPICERIE
+                v.startsWith("surgel") || v.startsWith("frozen") || v.startsWith("congel") -> SURGELES
+                else -> AUTRES
+            }
+        }
+    }
+}
+
+/** Endroit de la maison (inventaire). Codes compatibles avec les anciens plans. */
+enum class Endroit(val code: String) {
+    GARDE_MANGER("garde-manger"), FRIGO("frigo"), CONGELATEUR("congelateur"), AUTRE("autre");
+
+    companion object {
+        fun depuis(s: String): Endroit {
+            val v = simplifier(s)
+            return when {
+                v.startsWith("garde") || v.startsWith("pantry") || v.startsWith("despensa") || v.startsWith("armoire") -> GARDE_MANGER
+                v.startsWith("frig") || v.startsWith("fridge") || v.startsWith("refri") || v.startsWith("nevera") -> FRIGO
+                v.startsWith("cong") || v.startsWith("freez") -> CONGELATEUR
+                else -> AUTRE
+            }
+        }
+    }
+}
+
+data class IngredientRepas(val nom: String, val quantite: String, val source: Source)
 
 data class Repas(
-    val jour: String,
-    val moment: String,
+    val date: LocalDate?,       // nouveaux plans : date ISO
+    val jour: String,           // anciens plans : texte libre
+    val moment: Moment,
     val nom: String,
     val description: String,
     val portions: Int,
     val tempsMin: Int,
     val ingredients: List<IngredientRepas>,
-    val etapes: List<String>,
-    val rabaisUtilises: List<String>
-)
+    val etapes: List<String>
+) {
+    val utiliseRabais: Boolean get() = ingredients.any { it.source == Source.RABAIS }
+}
 
 data class ArticleEpicerie(
     val index: Int,
     val article: String,
     val quantite: String,
-    val rayon: String,
+    val rayon: Rayon,
     val enRabais: Boolean,
     val prixUnitaire: Double?,
     val cout: Double?,
@@ -38,32 +123,43 @@ data class ArticleEpicerie(
     val montant: Double get() = cout ?: prixUnitaire ?: 0.0
 }
 
-data class ItemInventaire(val nom: String, val zone: String, val quantite: String, val utiliserVite: Boolean) {
+data class ItemInventaire(val nom: String, val endroit: Endroit, val quantite: String, val utiliserVite: Boolean) {
     fun versJson(): JSONObject = JSONObject()
         .put("nom", nom)
-        .put("zone", zone)
+        .put("zone", endroit.code)
         .put("quantite", quantite)
         .put("utiliser_vite", utiliserVite)
 
     /** Ligne lisible envoyée à l'IA. */
     fun enTexte(): String = buildString {
         append("- ").append(nom)
-        if (quantite.isNotBlank()) append(" — ").append(quantite)
-        if (zone.isNotBlank()) append(" (").append(zone).append(")")
-        if (utiliserVite) append(" [à utiliser vite]")
+        if (quantite.isNotBlank()) append(", ").append(quantite)
+        append(" (").append(
+            when (endroit) {
+                Endroit.GARDE_MANGER -> "pantry"
+                Endroit.FRIGO -> "fridge"
+                Endroit.CONGELATEUR -> "freezer"
+                Endroit.AUTRE -> "other"
+            }
+        ).append(")")
+        if (utiliserVite) append(" [use soon]")
     }
 }
 
 data class Plan(
     val genereLe: Long,
-    val debutPlan: String,
-    val circulaireDebut: String?,
-    val circulaireFin: String?,
+    val debutPlan: LocalDate?,
+    val circulaireDebut: LocalDate?,
+    val circulaireFin: LocalDate?,
+    val marchand: String,
+    val devise: String,
+    val tauxTaxes: Double,
     val nbArticlesCirculaire: Int,
     val nbPhotos: Int,
-    val coutUsd: Double,
+    val coutUsd: Double?,        // null si le fournisseur ne publie pas de tarif connu de l'app
     val jetonsEntree: Int,
     val jetonsSortie: Int,
+    val fournisseur: String,
     val resume: String,
     val repas: List<Repas>,
     val epicerie: List<ArticleEpicerie>,
@@ -74,21 +170,11 @@ data class Plan(
     val consignes: String
 ) {
     val sousTotal: Double get() = epicerie.sumOf { it.montant }
-    val taxes: Double get() = epicerie.filter { it.taxable }.sumOf { it.montant } * TAUX_TAXES
+    val taxes: Double get() = epicerie.filter { it.taxable }.sumOf { it.montant } * tauxTaxes
     /** Total estimé, taxes incluses. */
     val totalEstime: Double get() = sousTotal + taxes
     val nbTaxables: Int get() = epicerie.count { it.taxable }
-}
-
-/** Ordre des rayons (proche d'un parcours d'épicerie typique). */
-val ORDRE_RAYONS = listOf(
-    "Fruits et légumes", "Boulangerie", "Viandes et poissons", "Produits laitiers et œufs",
-    "Épicerie", "Surgelés", "Autres"
-)
-
-fun indexRayon(rayon: String): Int {
-    val i = ORDRE_RAYONS.indexOfFirst { it.equals(rayon.trim(), ignoreCase = true) }
-    return if (i >= 0) i else ORDRE_RAYONS.size
+    val nbRabais: Int get() = epicerie.count { it.enRabais }
 }
 
 /** Enregistre et relit le plan de la semaine (un seul fichier JSON). */
@@ -129,23 +215,26 @@ object StockagePlan {
         }
     }
 
-    private fun analyser(racine: JSONObject): Plan {
+    private fun dateIso(s: String?): LocalDate? =
+        if (s.isNullOrBlank()) null else try { LocalDate.parse(s.trim().take(10)) } catch (e: Exception) { null }
+
+    fun analyser(racine: JSONObject): Plan {
         val meta = racine.optJSONObject("meta") ?: JSONObject()
         val ia = racine.optJSONObject("ia") ?: JSONObject()
 
         val repas = ia.optJSONArray("repas").objets().map { r ->
             Repas(
+                date = dateIso(r.txtOuNull("date")),
                 jour = r.txt("jour"),
-                moment = r.txt("moment", "souper"),
-                nom = r.txt("nom", "Repas"),
+                moment = Moment.depuis(r.txt("moment", "dinner")),
+                nom = r.txt("nom", "?"),
                 description = r.txt("description"),
                 portions = r.entier("portions", 0),
                 tempsMin = r.entier("temps_min", 0),
                 ingredients = r.optJSONArray("ingredients").objets().map { i ->
-                    IngredientRepas(i.txt("nom"), i.txt("quantite"), i.txt("source").lowercase())
+                    IngredientRepas(i.txt("nom"), i.txt("quantite"), Source.depuis(i.txt("source")))
                 },
-                etapes = r.optJSONArray("etapes").textes(),
-                rabaisUtilises = r.optJSONArray("rabais_utilises").textes()
+                etapes = r.optJSONArray("etapes").textes()
             )
         }
 
@@ -154,7 +243,7 @@ object StockagePlan {
                 index = index,
                 article = a.txt("article", "?"),
                 quantite = a.txt("quantite"),
-                rayon = a.txt("rayon", "Autres").ifBlank { "Autres" },
+                rayon = Rayon.depuis(a.txt("rayon", "other")),
                 enRabais = a.booleen("en_rabais"),
                 prixUnitaire = a.nombre("prix_unitaire") ?: a.nombre("prix"),
                 cout = a.nombre("cout"),
@@ -165,19 +254,23 @@ object StockagePlan {
         }
 
         val inventaire = ia.optJSONArray("inventaire").objets().map { i ->
-            ItemInventaire(i.txt("nom"), i.txt("zone"), i.txt("quantite"), i.booleen("utiliser_vite"))
+            ItemInventaire(i.txt("nom"), Endroit.depuis(i.txt("zone")), i.txt("quantite"), i.booleen("utiliser_vite"))
         }
 
         return Plan(
             genereLe = meta.optLong("genere_le"),
-            debutPlan = meta.txt("debut_plan"),
-            circulaireDebut = meta.txtOuNull("circulaire_debut"),
-            circulaireFin = meta.txtOuNull("circulaire_fin"),
+            debutPlan = dateIso(meta.txtOuNull("debut_plan")),
+            circulaireDebut = dateIso(meta.txtOuNull("circulaire_debut")),
+            circulaireFin = dateIso(meta.txtOuNull("circulaire_fin")),
+            marchand = meta.txt("marchand", "Maxi"),
+            devise = meta.txt("devise", "CAD"),
+            tauxTaxes = meta.nombre("taux_taxes") ?: TAUX_TAXES_ANCIEN,
             nbArticlesCirculaire = meta.entier("nb_articles_circulaire"),
             nbPhotos = meta.entier("nb_photos"),
-            coutUsd = meta.nombre("cout_usd") ?: 0.0,
+            coutUsd = (meta.opt("cout_usd") as? Number)?.toDouble()?.takeIf { it >= 0 },
             jetonsEntree = meta.entier("jetons_entree"),
             jetonsSortie = meta.entier("jetons_sortie"),
+            fournisseur = meta.txt("fournisseur", "DeepSeek"),
             resume = ia.txt("resume"),
             repas = repas,
             epicerie = epicerie,

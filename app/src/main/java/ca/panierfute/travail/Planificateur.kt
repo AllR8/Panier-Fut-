@@ -10,12 +10,11 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import ca.panierfute.data.Reglages
+import ca.panierfute.i18n.Textes
 import java.time.DayOfWeek
 import java.time.Duration
 import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
-import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -32,9 +31,7 @@ object Planificateur {
     const val TAG_MANUEL = "generation_manuelle"
     private const val NOM_MANUEL = "generation_manuelle"
 
-    private val FORMAT = DateTimeFormatter.ofPattern("EEEE d MMM 'à' HH 'h' mm", Locale.CANADA_FRENCH)
-
-    fun formater(t: ZonedDateTime): String = t.format(FORMAT)
+    fun formater(quand: ZonedDateTime, t: Textes): String = t.dateHeure(quand)
 
     fun prochainRappel(r: Reglages, maintenant: ZonedDateTime = ZonedDateTime.now()): ZonedDateTime =
         prochaineOccurrence(DayOfWeek.of(r.jourRappel), r.heureRappel, r.minuteRappel, maintenant)

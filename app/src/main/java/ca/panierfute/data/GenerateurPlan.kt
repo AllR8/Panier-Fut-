@@ -1,11 +1,13 @@
 package ca.panierfute.data
 
 import android.content.Context
-import android.util.Base64
+import ca.panierfute.i18n.Textes
+import ca.panierfute.i18n.textes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -20,9 +22,10 @@ sealed class ResultatGeneration {
  * Photos + ingrédients de base + circulaire → inventaire, repas de la semaine, liste d'épicerie.
  */
 object GenerateurPlan {
-    private val FR = Locale.CANADA_FRENCH
-    private val FORMAT_JOUR = DateTimeFormatter.ofPattern("EEEE d MMM", FR)
-    private val FORMAT_DATE = DateTimeFormatter.ofPattern("EEEE d MMMM", FR)
+    // Les consignes à l'IA sont en anglais ; ses réponses sont dans la langue de l'utilisateur.
+    private val EN = Locale.ENGLISH
+    private val FORMAT_JOUR = DateTimeFormatter.ofPattern("EEEE", EN)
+    private val FORMAT_DATE = DateTimeFormatter.ofPattern("EEEE MMMM d", EN)
 
     suspend fun generer(
         ctx: Context,
@@ -31,12 +34,13 @@ object GenerateurPlan {
         progres: suspend (String) -> Unit
     ): ResultatGeneration {
         val r = Reglages(ctx)
-        if (r.cleApi.isBlank()) {
-            throw IllegalStateException("Aucune clé API DeepSeek. Ajoute-la dans l'onglet Réglages.")
-        }
+        val e = r.lireEtat()
+        val t = textes(e.langue)
+        if (!e.iaConfiguree) throw IllegalStateException(t.erreurCleManquante)
+        if (!e.epicerieChoisie) throw IllegalStateException(t.erreurAucuneEpicerie)
         val photos = Photos.toutes(ctx)
-        if (photos.isEmpty() && !manuel && !r.genererSansPhotos) {
-            return ResultatGeneration.Ignore("Aucune photo reçue cette semaine.")
+        if (photos.isEmpty() && !manuel && !e.genererSansPhotos) {
+            return ResultatGeneration.Ignore(t.aucunePhotoSemaine)
         }
 
         // Régénération manuelle sans nouvelles photos : on réutilise l'inventaire du plan
@@ -48,21 +52,21 @@ object GenerateurPlan {
         val inventaireConnu = if (photos.isEmpty()) planActuel?.inventaire?.takeIf { it.isNotEmpty() } else null
         val repasRemplaces = planActuel?.repas?.map { it.nom }.orEmpty()
 
-        progres("Lecture de la circulaire ${r.marchand}…")
-        val circulaire = withContext(Dispatchers.IO) { SourceCirculaire.charger(r.codePostal, r.marchand) }
+        progres(t.progresCirculaire(e.marchand))
+        val circulaire = withContext(Dispatchers.IO) { SourceCirculaire.charger(e, t) }
 
         val maintenant = LocalDateTime.now()
         // Généré la nuit ou le matin : le plan commence aujourd'hui ; sinon, demain.
         val debut = if (maintenant.hour < 14) maintenant.toLocalDate() else maintenant.toLocalDate().plusDays(1)
-        val jours = (0L until 7L).map { debut.plusDays(it).format(FORMAT_JOUR) }
+        val jours = (0L until 7L).map { debut.plusDays(it) }
 
-        progres(if (photos.isEmpty()) "Préparation de la demande…" else "Préparation de ${photos.size} photo(s)…")
+        progres(if (photos.isEmpty()) t.progresDemande else t.progresPhotos(photos.size))
         val contenu = withContext(Dispatchers.IO) {
-            construireContenu(r, circulaire, photos, jours, maintenant, inventaireConnu, consignes.trim(), repasRemplaces)
+            construireContenu(e, r.repasRecents, circulaire, photos, jours, maintenant, inventaireConnu, consignes.trim(), repasRemplaces)
         }
-        val systeme = construireSysteme(jours, r.marchand)
+        val systeme = construireSysteme(jours, e)
 
-        progres("Analyse par l'IA… (1 à 3 minutes)")
+        progres(t.progresIA)
         // Au plus deux essais. Le 2e (rare) a plus d'espace, demande d'être plus bref et,
         // si le 1er a été coupé, se passe du mode JSON strict (qui peut boucler sur des espaces).
         val tentatives = ArrayList<ReponseIA>()
@@ -70,23 +74,26 @@ object GenerateurPlan {
         for (essai in 1..2) {
             val precedente = tentatives.lastOrNull()
             if (precedente != null) {
-                progres(if (precedente.coupee) "Réponse trop longue, nouvel essai…" else "Réponse incomplète, nouvel essai…")
+                progres(if (precedente.coupee) t.progresNouvelEssaiLong else t.progresNouvelEssai)
             }
-            val limite = if (essai == 1 && !r.reflexion) 32_000 else 64_000
+            // On ne paie que les jetons réellement générés : une limite haute ne coûte rien de plus.
+            val limite = when {
+                e.fournisseur == Fournisseur.DEEPSEEK -> if (essai == 1 && !e.reflexion) 32_000 else 64_000
+                else -> if (essai == 1) 16_000 else 32_000
+            }
             val strict = precedente == null || !precedente.coupee
             val instructions = if (precedente == null) systeme else systeme + RAPPEL_CONCIS
             val rep = withContext(Dispatchers.IO) {
-                DeepSeek.completer(r.cleApi, r.modele, instructions, contenu, r.reflexion, limite, strict)
+                ClientIA.completer(e.configIA(), instructions, contenu, limite, strict, t)
             }
             tentatives.add(rep)
             trouve = if (rep.coupee) null else lireReponse(rep.contenu)
             if (trouve != null) break
         }
-        val json = trouve ?: throw IllegalStateException(diagnostic(tentatives))
-        val reponse = tentatives.last()
-        val cout = tentatives.sumOf { it.coutUsd }
+        val json = trouve ?: throw IllegalStateException(diagnostic(tentatives, t))
+        val cout = if (tentatives.all { it.coutUsd != null }) tentatives.sumOf { it.coutUsd ?: 0.0 } else -1.0
 
-        progres("Enregistrement du plan…")
+        progres(t.progresEnregistrement)
         if (inventaireConnu != null) {
             // L'inventaire confirmé par l'utilisateur reste la référence.
             val tableau = JSONArray()
@@ -98,12 +105,17 @@ object GenerateurPlan {
             .put("debut_plan", debut.toString())
             .put("circulaire_debut", circulaire.debut?.toString() ?: JSONObject.NULL)
             .put("circulaire_fin", circulaire.fin?.toString() ?: JSONObject.NULL)
+            .put("marchand", e.marchand)
+            .put("devise", e.region.devise)
+            .put("taux_taxes", e.tauxTaxes)
+            .put("langue", e.langue.code)
             .put("nb_articles_circulaire", circulaire.articles.size)
             .put("nb_photos", photos.size)
             .put("cout_usd", cout)
-            .put("jetons_entree", reponse.jetonsEntree)
-            .put("jetons_sortie", reponse.jetonsSortie)
-            .put("modele", r.modele)
+            .put("jetons_entree", tentatives.sumOf { it.jetonsEntree })
+            .put("jetons_sortie", tentatives.sumOf { it.jetonsSortie })
+            .put("fournisseur", e.fournisseur.nom.ifBlank { t.fournisseurAutre })
+            .put("modele", e.modele)
             .put("consignes", consignes.trim())
             .put("inventaire_corrige", inventaireConnu != null && planActuel?.inventaireCorrige == true)
         withContext(Dispatchers.IO) {
@@ -118,25 +130,22 @@ object GenerateurPlan {
         r.coches = emptySet()
         r.derniereErreur = ""
 
-        val plan = StockagePlan.charger(ctx)
-            ?: throw IllegalStateException("Le plan reçu n'a pas pu être enregistré.")
+        val plan = StockagePlan.charger(ctx) ?: throw IllegalStateException(t.erreurEnregistrement)
         return ResultatGeneration.Succes(plan)
     }
 
-    private const val RAPPEL_CONCIS = "\n\nIMPORTANT : ta réponse précédente était trop longue ou illisible. " +
-        "Sois bref : descriptions d'une phrase, 3 à 5 étapes courtes par repas, inventaire limité à 30 éléments."
+    private const val RAPPEL_CONCIS = "\n\nIMPORTANT: your previous answer was too long or unreadable. " +
+        "Be brief: one-sentence descriptions, 3 to 5 short steps per meal, at most 30 inventory items."
 
     /** Message d'erreur précis, pour savoir ce qui s'est passé si les deux essais échouent. */
-    private fun diagnostic(tentatives: List<ReponseIA>): String {
-        val d = tentatives.lastOrNull() ?: return "L'IA n'a pas répondu."
-        val detail = buildString {
-            if (d.coupee) append("réponse coupée après ${d.jetonsSortie} jetons")
-            else append("réponse illisible (${d.contenu.length} caractères)")
-            if (d.jetonsReflexion > 0) append(", dont ${d.jetonsReflexion} de réflexion")
-            if (d.contenu.isNotEmpty() && d.contenu.trim().length < d.contenu.length / 10) append(", surtout des espaces")
+    private fun diagnostic(tentatives: List<ReponseIA>, t: Textes): String {
+        val d = tentatives.lastOrNull() ?: return t.erreurIASansReponse
+        val details = buildList {
+            add(if (d.coupee) t.diagnosticCoupee(d.jetonsSortie) else t.diagnosticIllisible(d.contenu.length))
+            if (d.jetonsReflexion > 0) add(t.diagnosticReflexion(d.jetonsReflexion))
+            if (d.contenu.isNotEmpty() && d.contenu.trim().length < d.contenu.length / 10) add(t.diagnosticEspaces)
         }
-        return "L'IA n'a pas renvoyé de plan complet après ${tentatives.size} essai(s) ($detail). " +
-            "Réessaie ; si ça recommence, envoie ce message à Claude."
+        return t.erreurPlanIncomplet(tentatives.size, details.joinToString(", "))
     }
 
     private fun lireReponse(texte: String): JSONObject? {
@@ -150,131 +159,140 @@ object GenerateurPlan {
     }
 
     private fun construireContenu(
-        r: Reglages,
+        e: EtatReglages,
+        repasRecents: List<String>,
         c: Circulaire,
         photos: List<Pair<Zone, java.io.File>>,
-        jours: List<String>,
+        jours: List<LocalDate>,
         maintenant: LocalDateTime,
         inventaireConnu: List<ItemInventaire>?,
         consignes: String,
         repasRemplaces: List<String>
-    ): JSONArray {
+    ): List<PartieDemande> {
         val moments = buildList {
-            if (r.dejeuners) add("déjeuner")
-            if (r.diners) add("dîner")
-            if (r.soupers || (!r.dejeuners && !r.diners)) add("souper")
+            if (e.dejeuners) add("breakfast")
+            if (e.diners) add("lunch")
+            if (e.soupers || (!e.dejeuners && !e.diners)) add("dinner")
         }
         val periode = when {
-            c.debut != null && c.fin != null -> "valide du ${c.debut.format(FORMAT_DATE)} au ${c.fin.format(FORMAT_DATE)}"
-            c.fin != null -> "valide jusqu'au ${c.fin.format(FORMAT_DATE)}"
-            else -> "de la semaine"
+            c.debut != null && c.fin != null -> "valid from ${c.debut.format(FORMAT_DATE)} to ${c.fin.format(FORMAT_DATE)}"
+            c.fin != null -> "valid until ${c.fin.format(FORMAT_DATE)}"
+            else -> "for this week"
         }
 
         val texte = buildString {
-            appendLine("Date et heure : ${maintenant.format(DateTimeFormatter.ofPattern("EEEE d MMMM yyyy, HH 'h' mm", FR))}.")
-            appendLine("Jours à planifier (dans l'ordre) : ${jours.joinToString(" ; ")}.")
-            appendLine("Repas à planifier chaque jour : ${moments.joinToString(", ")}.")
-            appendLine("Portions par repas : ${r.portions}.")
-            val pref = r.preferences.trim()
-            appendLine("Préférences et contraintes du ménage : ${if (pref.isEmpty()) "aucune particulière" else pref}.")
-            val recents = r.repasRecents.filter { it !in repasRemplaces }.take(14)
+            appendLine("Now: ${maintenant.format(DateTimeFormatter.ofPattern("EEEE MMMM d yyyy, HH:mm", EN))}.")
+            appendLine("Days to plan, in order: ${jours.joinToString("; ") { "${it} (${it.format(FORMAT_JOUR)})" }}.")
+            appendLine("Meals to plan each day: ${moments.joinToString(", ")}.")
+            appendLine("Servings per meal: ${e.portions}.")
+            val pref = e.preferences.trim()
+            appendLine("Household preferences and constraints: ${if (pref.isEmpty()) "none in particular" else pref}.")
+            val recents = repasRecents.filter { it !in repasRemplaces }.take(14)
             if (recents.isNotEmpty()) {
-                appendLine("Repas des semaines précédentes (ne pas les répéter) : ${recents.joinToString(" ; ")}.")
+                appendLine("Meals from previous weeks (do not repeat them): ${recents.joinToString("; ")}.")
             }
             if (repasRemplaces.isNotEmpty()) {
-                appendLine("PLAN ACTUEL DE CETTE SEMAINE, que l'utilisateur veut remplacer par une nouvelle version (garde un de ces repas seulement si ses consignes le demandent) : ${repasRemplaces.joinToString(" ; ")}.")
+                appendLine("CURRENT PLAN FOR THIS WEEK, which the user wants replaced by a new version (keep one of these meals only if the instructions ask for it): ${repasRemplaces.joinToString("; ")}.")
             }
             if (consignes.isNotEmpty()) {
                 appendLine()
-                appendLine("CONSIGNES DE L'UTILISATEUR POUR CETTE VERSION (prioritaires sur tout le reste, sauf les allergies) :")
+                appendLine("USER INSTRUCTIONS FOR THIS VERSION (take priority over everything else, except allergies):")
                 appendLine(consignes)
             }
             appendLine()
-            appendLine("INGRÉDIENTS DE BASE toujours disponibles (utilise-les librement ; ne les mets jamais dans l'épicerie ni dans l'inventaire) :")
-            appendLine(r.ingredientsBase.joinToString(", "))
+            appendLine("BASIC INGREDIENTS always at home (use them freely; never put them in the grocery list or the inventory):")
+            appendLine(e.ingredientsBase.joinToString(", "))
             appendLine()
-            appendLine("CIRCULAIRE ${c.marchand.uppercase(FR)} (succursale du code postal ${r.codePostal}) $periode. L'épicerie sera faite avant la fin de la circulaire. Format : nom | prix | précisions.")
+            appendLine("FLYER FROM ${c.marchand} (store near postal code ${Region.afficherCodePostal(e.codePostal)}, ${e.region.nom.ifBlank { "Canada" }}), $periode. Shopping will be done before the flyer ends. Format: name | price | details.")
             append(c.enTexte())
             appendLine()
             if (inventaireConnu != null) {
-                appendLine("INVENTAIRE CONFIRMÉ ET CORRIGÉ PAR L'UTILISATEUR (fiable : utilise-le tel quel) :")
+                appendLine("INVENTORY CONFIRMED AND CORRECTED BY THE USER (reliable: use it as is):")
                 inventaireConnu.forEach { appendLine(it.enTexte()) }
                 appendLine()
-                appendLine("PHOTOS : aucune nouvelle photo. Base-toi sur l'inventaire ci-dessus et renvoie \"inventaire\": [] (il est déjà connu).")
+                appendLine("PHOTOS: no new photos. Rely on the inventory above and return \"inventaire\": [] (it is already known).")
             } else if (photos.isEmpty()) {
-                appendLine("PHOTOS : aucune cette semaine. Suppose qu'il n'y a que les ingrédients de base ; l'inventaire sera vide.")
+                appendLine("PHOTOS: none this week. Assume only the basic ingredients are available; the inventory will be empty.")
             } else {
-                appendLine("PHOTOS : ${photos.size} photo(s) suivent, chacune précédée de sa zone (garde-manger, frigo ou congélateur).")
+                appendLine("PHOTOS: ${photos.size} photo(s) follow, each preceded by its location (pantry, fridge or freezer).")
             }
             appendLine()
-            append("Produis maintenant le plan en json, exactement selon le schéma demandé.")
+            append("Now produce the plan as json, exactly following the requested schema.")
         }
 
-        val parties = JSONArray()
-        parties.put(JSONObject().put("type", "text").put("text", texte))
+        val parties = ArrayList<PartieDemande>()
+        parties.add(PartieDemande.Texte(texte))
         photos.forEachIndexed { i, (zone, fichier) ->
-            parties.put(JSONObject().put("type", "text").put("text", "Photo ${i + 1}/${photos.size} — ${zone.titre}"))
-            val b64 = Base64.encodeToString(fichier.readBytes(), Base64.NO_WRAP)
-            parties.put(
-                JSONObject().put("type", "image_url")
-                    .put("image_url", JSONObject().put("url", "data:image/jpeg;base64,$b64"))
-            )
+            val lieu = when (zone) {
+                Zone.GARDE_MANGER -> "Pantry"
+                Zone.FRIGO -> "Fridge"
+                Zone.CONGELO -> "Freezer"
+            }
+            parties.add(PartieDemande.Texte("Photo ${i + 1}/${photos.size}: $lieu"))
+            parties.add(PartieDemande.Image(fichier.readBytes()))
         }
         return parties
     }
 
-    private fun construireSysteme(jours: List<String>, marchand: String): String = """
-Tu es « Panier Futé », un planificateur de repas et d'épicerie économe pour un ménage de la ville de Québec. Tu écris en français québécois naturel et tu utilises les unités métriques (sauf si la circulaire indique des livres).
+    private fun regleTaxes(region: Region): String = when (region.pays) {
+        "CA" -> "true only for items subject to sales tax in ${region.nom}: soft drinks, sparkling water, candy and confectionery, chips and snack foods, alcohol, non-food products. Basic groceries (fruit, vegetables, meat, fish, eggs, bread, dairy, cereals, pasta, rice, canned goods, etc.) are zero-rated in Canada: taxable = false."
+        "US" -> "true for items normally subject to sales tax in ${region.nom} (usually soft drinks, candy, prepared foods and non-food products; groceries are often exempt or taxed at a reduced rate)."
+        else -> "true for soft drinks, candy, snack foods, alcohol and non-food products; false for basic groceries."
+    }
 
-Tu reçois : des photos du garde-manger, du frigo et du congélateur (ou un inventaire déjà confirmé par l'utilisateur) ; la liste des ingrédients de base toujours disponibles ; les produits de la circulaire de l'épicier ; parfois des consignes ponctuelles de l'utilisateur.
+    private fun construireSysteme(jours: List<LocalDate>, e: EtatReglages): String = """
+You are "Panier Futé", a thrifty meal and grocery planner for one household. Write every user-facing text value (meal names, descriptions, steps, ingredient names and quantities, grocery articles and quantities, "pour", inventory names, "resume", "remarques") in ${e.langue.nomAnglais}. Use metric units unless the flyer uses pounds. Keep json keys and code values exactly as specified below.
 
-Ta mission, en une seule réponse :
-1. INVENTAIRE — Liste ce que tu vois réellement sur les photos. N'invente rien. Si tu n'es pas certain d'un aliment, ajoute « (?) » à son nom. Marque utiliser_vite = true pour ce qui semble entamé, mûr ou périssable (légumes, restes, viande décongelée, produits laitiers ouverts). Ignore les ingrédients de base. Au plus 40 éléments : regroupe les petits articles (ex. « condiments variés »).
-2. REPAS — Planifie les repas demandés pour chacun des jours. Priorités, dans l'ordre : (a) utiliser ce qui doit être mangé vite, (b) profiter des produits en rabais de la circulaire, (c) utiliser le reste de l'inventaire, (d) acheter le moins possible au prix régulier.
-   - Repas réalistes : 40 minutes ou moins en semaine, un peu plus élaborés la fin de semaine.
-   - Varie les protéines et les styles ; pas deux fois le même plat.
-   - Prévois des restes intelligents quand c'est logique (cuire plus, réutiliser le lendemain) et dis-le dans la description.
-   - Les quantités doivent correspondre au nombre de portions.
-   - 3 à 6 étapes d'une phrase chacune.
-   - Le champ « jour » doit être exactement une de ces valeurs : ${jours.joinToString(" | ")}.
-3. ÉPICERIE — Seulement ce qui manque pour réaliser les repas (rien de l'inventaire suffisant, aucun ingrédient de base).
-   - Regroupe chaque article dans un de ces rayons : Fruits et légumes | Boulangerie | Viandes et poissons | Produits laitiers et œufs | Épicerie | Surgelés | Autres.
-   - Si l'article est dans la circulaire : en_rabais = true, prix_unitaire = le prix de la circulaire, et nomme l'article comme dans la circulaire (en minuscules lisibles).
-   - Sinon : en_rabais = false, estime un prix réaliste chez $marchand à Québec et mets prix_estime = true.
-   - cout = coût total pour la quantité à acheter (prix_unitaire × nombre d'unités), avant taxes.
-   - taxable = true seulement pour ce qui est taxé au Québec (TPS + TVQ) : boissons gazeuses, eau pétillante, bonbons et confiseries, croustilles et grignotines, alcool, produits non alimentaires. Les aliments de base (fruits, légumes, viande, poisson, œufs, pain, produits laitiers, céréales, pâtes, riz, conserves, etc.) sont détaxés : taxable = false.
-   - Un produit non périssable ou congelable en très bon rabais peut être acheté en plus pour faire des réserves : mentionne-le dans remarques.
-4. Ignore les produits non alimentaires de la circulaire.
+You receive: photos of the pantry, fridge and freezer (or an inventory already confirmed by the user); the basic ingredients always at home; this week's flyer from the household's grocery store (${e.marchand}); sometimes one-off instructions from the user.
 
-Sois concis : pas de texte superflu. Réponds UNIQUEMENT avec un objet json valide, sans texte autour, selon ce schéma :
+In a single answer:
+1. INVENTORY: list only what you actually see in the photos. Never invent anything. If unsure about an item, add "(?)" to its name. Set utiliser_vite = true for what looks opened, ripe or perishable (vegetables, leftovers, thawed meat, opened dairy). Ignore basic ingredients. At most 40 items: group small things (e.g. assorted condiments).
+2. MEALS: plan the requested meals for each day. Priorities, in order: (a) use what must be eaten soon, (b) take advantage of the flyer's sale items, (c) use the rest of the inventory, (d) buy as little as possible at regular price.
+   - Realistic meals: 40 minutes or less on weekdays, a bit more elaborate on weekends.
+   - Vary proteins and styles; never the same dish twice.
+   - Plan smart leftovers when it makes sense (cook more, reuse the next day) and say so in the description.
+   - Quantities must match the number of servings.
+   - 3 to 6 steps, one sentence each.
+   - "date" must be exactly one of: ${jours.joinToString(" | ")}. "moment" must be one of: breakfast, lunch, dinner.
+3. GROCERY LIST: only what is missing to make the meals (nothing the inventory already covers, no basic ingredients).
+   - "rayon" must be one of these codes: produce, bakery, meat_fish, dairy_eggs, pantry, frozen, other.
+   - If the item is in the flyer: en_rabais = true, prix_unitaire = the flyer price, and name the article as in the flyer (in readable case, translated if needed).
+   - Otherwise: en_rabais = false, estimate a realistic regular price at ${e.marchand} in ${e.region.nom.ifBlank { "Canada" }} and set prix_estime = true.
+   - cout = total cost of the quantity to buy (prix_unitaire × number of units), before tax.
+   - taxable = ${regleTaxes(e.region)}
+   - A non-perishable or freezable item at a very good sale price may be bought extra to stock up: mention it in remarques.
+   - "pour" lists the meals the item is for, e.g. the weekday and the meal.
+4. Ignore non-food items in the flyer.
+
+Be concise: no superfluous text. Answer ONLY with one valid json object, with no text around it, following this schema:
 {
-  "resume": "Deux phrases sur la stratégie de la semaine.",
+  "resume": "<two sentences on this week's strategy>",
   "inventaire": [
-    {"nom": "poitrines de poulet", "zone": "congelateur", "quantite": "environ 4", "utiliser_vite": false}
+    {"nom": "<item>", "zone": "freezer", "quantite": "<about 4>", "utiliser_vite": false}
   ],
   "repas": [
     {
-      "jour": "${jours.first()}",
-      "moment": "souper",
-      "nom": "Nom appétissant du plat",
-      "description": "Une phrase. Mentionne les restes prévus s'il y a lieu.",
-      "portions": 2,
+      "date": "${jours.first()}",
+      "moment": "dinner",
+      "nom": "<appetizing dish name>",
+      "description": "<one sentence; mention planned leftovers if any>",
+      "portions": ${e.portions},
       "temps_min": 35,
       "ingredients": [
-        {"nom": "carottes", "quantite": "4", "source": "rabais"},
-        {"nom": "poitrines de poulet", "quantite": "2", "source": "inventaire"},
-        {"nom": "paprika", "quantite": "1 c. à thé", "source": "base"},
-        {"nom": "crème sure", "quantite": "125 ml", "source": "achat"}
+        {"nom": "<ingredient>", "quantite": "<4>", "source": "sale"},
+        {"nom": "<ingredient>", "quantite": "<2>", "source": "inventory"},
+        {"nom": "<ingredient>", "quantite": "<1 tsp>", "source": "basic"},
+        {"nom": "<ingredient>", "quantite": "<125 ml>", "source": "buy"}
       ],
-      "etapes": ["Étape courte.", "Étape courte."]
+      "etapes": ["<short step>", "<short step>"]
     }
   ],
   "epicerie": [
-    {"article": "Carottes, sac de 3 lb", "quantite": "1 sac", "rayon": "Fruits et légumes", "en_rabais": true, "prix_unitaire": 2.49, "cout": 2.49, "prix_estime": false, "taxable": false, "pour": ["samedi souper", "mardi souper"]}
+    {"article": "<article as in the flyer>", "quantite": "<1 bag>", "rayon": "produce", "en_rabais": true, "prix_unitaire": 2.49, "cout": 2.49, "prix_estime": false, "taxable": false, "pour": ["<weekday meal>"]}
   ],
   "economies_estimees": 12.50,
-  "remarques": ["Conseil ou mise en garde utile (photo floue, achat à stocker, etc.)."]
+  "remarques": ["<useful tip or warning: blurry photo, item worth stocking up on, etc.>"]
 }
-Valeurs permises pour « source » : inventaire, rabais, base, achat. Valeurs permises pour « zone » : garde-manger, frigo, congelateur.
+Allowed values for "source": inventory, sale, basic, buy. Allowed values for "zone": pantry, fridge, freezer.
 """.trim()
 }

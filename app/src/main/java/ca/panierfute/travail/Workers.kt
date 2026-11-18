@@ -9,11 +9,11 @@ import ca.panierfute.data.GenerateurPlan
 import ca.panierfute.data.Photos
 import ca.panierfute.data.Reglages
 import ca.panierfute.data.ResultatGeneration
+import ca.panierfute.i18n.textes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
-import java.util.Locale
 import kotlin.math.max
 
 /** Rappel du vendredi soir : « prends tes photos ». */
@@ -21,15 +21,11 @@ class RappelWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
     override suspend fun doWork(): Result {
         val ctx = applicationContext
         val r = Reglages(ctx)
+        val t = textes(r.langue)
         r.dernierRappelMs = System.currentTimeMillis()
-        val quand = Planificateur.formater(Planificateur.prochaineGeneration(r))
+        val quand = Planificateur.formater(Planificateur.prochaineGeneration(r), t)
         val dejaPrises = Photos.toutes(ctx).size
-        val texte = if (dejaPrises > 0) {
-            "$dejaPrises photo(s) déjà prêtes. Ajoutes-en si tu veux : le plan sera généré $quand."
-        } else {
-            "Prends quelques photos du garde-manger, du frigo et du congélateur. Le plan sera généré $quand."
-        }
-        Notifs.rappelPhotos(ctx, texte)
+        Notifs.rappelPhotos(ctx, t, t.notifRappelTexte(dejaPrises, quand))
         withContext(Dispatchers.IO) { Planificateur.planifierSuivante(ctx, Planificateur.TAG_RAPPEL, id) }
         return Result.success()
     }
@@ -48,6 +44,7 @@ class GenerationWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
     override suspend fun doWork(): Result {
         val ctx = applicationContext
         val r = Reglages(ctx)
+        val t = textes(r.langue)
         val manuel = inputData.getBoolean(CLE_MANUEL, false)
         val consignes = inputData.getString(CLE_CONSIGNES) ?: ""
         var replanifier = !manuel
@@ -64,20 +61,8 @@ class GenerationWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
                 setProgress(workDataOf(CLE_ETAPE to etape))
             }
             when (resultat) {
-                is ResultatGeneration.Succes -> {
-                    val p = resultat.plan
-                    val total = String.format(Locale.CANADA_FRENCH, "%.2f", p.totalEstime)
-                    val economies = p.economiesEstimees?.let {
-                        " Économies estimées : " + String.format(Locale.CANADA_FRENCH, "%.2f", it) + " \$."
-                    } ?: ""
-                    Notifs.planPret(
-                        ctx,
-                        "${p.repas.size} repas planifiés, ${p.epicerie.size} articles à acheter (≈ $total \$ taxes incluses).$economies"
-                    )
-                }
-                is ResultatGeneration.Ignore -> {
-                    Notifs.erreur(ctx, "${resultat.raison} Ouvre l'app pour ajouter tes photos et lancer la génération.")
-                }
+                is ResultatGeneration.Succes -> Notifs.planPret(ctx, t, t.notifPlanTexte(resultat.plan))
+                is ResultatGeneration.Ignore -> Notifs.erreur(ctx, t, resultat.raison + " " + t.notifOuvrirPourPhotos)
             }
             return Result.success()
         } catch (e: CancellationException) {
@@ -92,7 +77,7 @@ class GenerationWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker
             }
             val message = e.message ?: e.javaClass.simpleName
             r.derniereErreur = message
-            Notifs.erreur(ctx, message)
+            Notifs.erreur(ctx, t, message)
             return Result.failure(workDataOf("erreur" to message))
         } finally {
             if (replanifier) {

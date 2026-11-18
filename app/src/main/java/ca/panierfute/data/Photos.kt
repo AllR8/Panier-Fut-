@@ -10,11 +10,11 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** Les trois endroits à photographier. */
-enum class Zone(val cle: String, val titre: String, val emoji: String, val conseil: String) {
-    GARDE_MANGER("garde_manger", "Garde-manger", "🥫", "Ouvre les portes, une photo par tablette si besoin."),
-    FRIGO("frigo", "Frigo", "🥬", "N'oublie pas la porte et les tiroirs à légumes."),
-    CONGELO("congelo", "Congélateur", "❄️", "Sors les sacs du fond si tu peux.");
+/** Les trois endroits à photographier (les libellés sont dans i18n/Textes). */
+enum class Zone(val cle: String) {
+    GARDE_MANGER("garde_manger"),
+    FRIGO("frigo"),
+    CONGELO("congelo");
 
     companion object {
         fun depuisCle(cle: String?): Zone? = entries.firstOrNull { it.cle == cle }

@@ -1,47 +1,43 @@
-@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@file:OptIn(ExperimentalLayoutApi::class)
 
 package ca.panierfute.ui
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,78 +46,100 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import ca.panierfute.data.IngredientRepas
+import ca.panierfute.R
+import ca.panierfute.data.Endroit
 import ca.panierfute.data.ItemInventaire
+import ca.panierfute.data.Langue
 import ca.panierfute.data.Plan
+import ca.panierfute.data.Region
 import ca.panierfute.data.Repas
-import java.util.Locale
+import ca.panierfute.data.Source
+import ca.panierfute.i18n.Textes
+import java.time.LocalDate
+
+val MARGE = 20.dp
 
 @Composable
-fun EcranSemaine(vm: AppViewModel) {
-    val plan = vm.plan
+fun EcranSemaine(ui: EtatApp) {
+    val plan = ui.plan
+    val t = ui.t
+    val r = ui.reglages
     var confirmer by remember { mutableStateOf(false) }
     var consignes by rememberSaveable { mutableStateOf("") }
     var garder by rememberSaveable { mutableStateOf(false) }
-    val occupe = vm.generationEnCours || vm.attenteReseau
-    val nouvellesPhotos = vm.photos.values.sumOf { it.size }
+    val occupe = ui.generationEnCours || ui.attenteReseau
+    val nouvellesPhotos = ui.photos.values.sumOf { it.size }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = PaddingValues(start = MARGE, end = MARGE, top = 8.dp, bottom = 40.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         item {
             EnTete(
-                "Ta semaine",
-                "Rappel photos : ${vm.prochainRappel}\nGénération auto : ${vm.prochaineGeneration}"
+                t.titreSemaine,
+                if (r.epicerieChoisie) t.epicerieEtCodePostal(r.marchand, Region.afficherCodePostal(r.codePostal)) else null
             )
         }
 
         if (occupe) {
-            item { CarteProgression(if (vm.attenteReseau) "En attente d'une connexion Internet…" else vm.etape) }
+            item { BlocProgression(if (ui.attenteReseau) t.attenteReseau else ui.etape, t) }
         }
-        if (vm.erreur.isNotBlank() && !vm.generationEnCours) {
-            item { CarteErreur(vm.erreur) }
+        if (ui.erreur.isNotBlank() && !ui.generationEnCours) {
+            item { BlocErreur(t.generationEchouee, ui.erreur) }
         }
 
         if (plan == null) {
-            item { CarteBienvenue(vm) }
-            item {
-                Button(
-                    onClick = { vm.generer() },
-                    enabled = !occupe,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                ) {
-                    Icon(Icons.Filled.Refresh, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Générer mon plan maintenant")
-                }
-            }
+            item { Accueil(ui, occupe) }
         } else {
-            item { CarteResume(plan) }
-            plan.repas.groupBy { it.jour }.forEach { (jour, repasDuJour) ->
+            item { BandeCirculaire(plan.circulaireDebut, plan.circulaireFin, ui.aujourdhui, t) }
+            item { BlocTotal(plan, ui.langue, t) { ui.onglet = Onglet.EPICERIE } }
+            if (plan.resume.isNotBlank() || plan.consignes.isNotBlank()) {
                 item {
-                    Text(
-                        majuscule(jour),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (plan.resume.isNotBlank()) Texte(plan.resume, doux = true)
+                        if (plan.consignes.isNotBlank()) Texte(t.versionDemandee(plan.consignes), style = P.t.petit)
+                    }
                 }
-                items(repasDuJour) { r -> CarteRepas(r) }
             }
-            item { CarteInventaire(vm, plan) }
+
+            item { TitreSection(t.titreRepas) }
+            val jours = plan.repas
+                .groupBy { it.date?.toString() ?: it.jour }
+                .toList()
+                .sortedBy { (_, liste) -> liste.first().date ?: LocalDate.MAX }
+            items(jours, key = { it.first }) { (_, repas) ->
+                Column {
+                    JourDuPlan(repas.sortedBy { it.moment.ordinal }, ui.aujourdhui, t)
+                    Separateur(Modifier.padding(top = 18.dp))
+                }
+            }
+
+            item { BlocInventaire(ui, plan) }
             if (plan.remarques.isNotEmpty()) {
                 item {
-                    Section("Remarques") {
-                        plan.remarques.forEach { Text("• $it", style = MaterialTheme.typography.bodyMedium) }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TitreSection(t.titreRemarques)
+                        plan.remarques.forEach { rq ->
+                            Row {
+                                Box(
+                                    Modifier.padding(top = 8.dp, end = 10.dp).size(5.dp)
+                                        .background(P.c.encre, CircleShape)
+                                )
+                                Texte(rq)
+                            }
+                        }
                     }
                 }
             }
             item {
-                CarteRegenerer(
+                BlocRegenerer(
+                    t = t,
                     consignes = consignes,
                     changerConsignes = { consignes = it },
                     garder = garder,
@@ -130,326 +148,300 @@ fun EcranSemaine(vm: AppViewModel) {
                     lancer = { confirmer = true }
                 )
             }
+            item { PiedDePage(plan, ui) }
         }
     }
 
     if (confirmer) {
-        val source = if (nouvellesPhotos > 0) {
-            "Tes $nouvellesPhotos nouvelle(s) photo(s) seront analysées."
-        } else {
-            "Pas de nouvelles photos : l'IA utilisera l'inventaire ci-dessus, avec tes corrections."
-        }
-        AlertDialog(
-            onDismissRequest = { confirmer = false },
-            title = { Text("Régénérer le plan ?") },
-            text = {
-                Text(
-                    "$source Le nouveau plan remplacera l'actuel et la liste d'épicerie. " +
-                        "Coût : moins d'un cent."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmer = false
-                    vm.generer(consignes, garder)
-                    consignes = ""
-                    garder = false
-                }) { Text("Régénérer") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmer = false }) { Text("Annuler") }
+        Dialogue(
+            titre = t.regenererTitre,
+            texte = t.regenererTexte(nouvellesPhotos),
+            confirmer = t.regenerer,
+            annuler = t.annuler,
+            fermer = { confirmer = false },
+            valider = {
+                confirmer = false
+                ui.generer(consignes, garder)
+                consignes = ""
+                garder = false
             }
         )
     }
 }
 
-/** Zone de régénération : précisions ponctuelles pour la nouvelle version du plan. */
+// ---------------------------------------------------------------------------
+
 @Composable
-private fun CarteRegenerer(
-    consignes: String,
-    changerConsignes: (String) -> Unit,
-    garder: Boolean,
-    changerGarder: (Boolean) -> Unit,
-    occupe: Boolean,
-    lancer: () -> Unit
-) {
-    Section("Pas tout à fait ça ? Régénère le plan") {
-        Text(
-            "Dis à l'IA quoi changer. Elle repart de ton inventaire et de la circulaire.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+private fun BlocProgression(etape: String, t: Textes) {
+    Feuille {
+        Text(t.preparationPlan, style = P.t.titreLigne, color = P.c.encre)
+        LinearProgressIndicator(
+            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+            color = P.c.action,
+            trackColor = P.c.trait
         )
-        OutlinedTextField(
-            value = consignes,
-            onValueChange = changerConsignes,
-            label = { Text("Nouvelles préférences (facultatif)") },
-            placeholder = { Text("ex. : plus végé, pas de porc, budget serré, garde le souper de samedi") },
-            minLines = 2,
+        if (etape.isNotBlank()) Texte(etape)
+        Texte(t.fermerAppPossible, doux = true, style = P.t.petit)
+    }
+}
+
+@Composable
+fun BlocErreur(titre: String, message: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .clip(RoundedCornerShape(14.dp))
+            .background(P.c.carton)
+    ) {
+        Box(Modifier.width(5.dp).fillMaxHeight().background(P.c.tomate))
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(titre, style = P.t.titreLigne, color = P.c.tomate)
+            Texte(message)
+        }
+    }
+}
+
+@Composable
+private fun Accueil(ui: EtatApp, occupe: Boolean) {
+    val t = ui.t
+    val r = ui.reglages
+    val nbPhotos = ui.photos.values.sumOf { it.size }
+    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Texte(t.accueilIntro)
+        Segments(
+            options = Langue.entries.map { it.nom },
+            choisi = Langue.entries.indexOf(ui.langue),
+            choisir = { ui.changerLangue(Langue.entries[it]) }
+        )
+        Feuille(padding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)) {
+            EtapeAccueil(1, t.etapeEpicerie, if (r.epicerieChoisie) r.marchand else null, r.epicerieChoisie) {
+                ui.onglet = Onglet.REGLAGES
+            }
+            Separateur()
+            EtapeAccueil(2, t.etapeCle, if (r.iaConfiguree) r.fournisseur.nom.ifBlank { t.fournisseurAutre } else null, r.iaConfiguree) { ui.onglet = Onglet.REGLAGES }
+            Separateur()
+            EtapeAccueil(3, t.etapePhotos, if (nbPhotos > 0) t.nbPhotos(nbPhotos) else null, nbPhotos > 0) {
+                ui.onglet = Onglet.PHOTOS
+            }
+        }
+        BoutonPrincipal(
+            t.genererPlan,
+            onClick = { ui.generer() },
+            actif = !occupe,
             modifier = Modifier.fillMaxWidth()
         )
-        Row(
-            Modifier.fillMaxWidth().clickable { changerGarder(!garder) },
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Checkbox(checked = garder, onCheckedChange = changerGarder)
-            Text("Garder ces préférences pour les prochaines semaines", style = MaterialTheme.typography.bodyMedium)
-        }
-        Button(onClick = lancer, enabled = !occupe, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Filled.Refresh, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Régénérer le plan")
-        }
+        Texte(t.horaireResume(ui.prochainRappel, ui.prochaineGeneration), doux = true, style = P.t.petit)
     }
 }
 
 @Composable
-private fun CarteProgression(etape: String) {
-    Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-    ) {
-        Column(Modifier.padding(16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Préparation de ton plan…", style = MaterialTheme.typography.titleMedium)
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            if (etape.isNotBlank()) Text(etape, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                "Tu peux fermer l'app : une notification t'avertira.",
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-    }
-}
-
-@Composable
-private fun CarteErreur(message: String) {
-    Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-            contentColor = MaterialTheme.colorScheme.onErrorContainer
-        )
-    ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
-            Icon(Icons.Filled.Warning, contentDescription = null)
-            Spacer(Modifier.width(12.dp))
-            Column {
-                Text("La dernière génération a échoué", style = MaterialTheme.typography.titleSmall)
-                Text(message, style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-    }
-}
-
-@Composable
-private fun CarteBienvenue(vm: AppViewModel) {
-    val cleOk = vm.reglages.cleApi.isNotBlank()
-    val nbPhotos = vm.photos.values.sumOf { it.size }
-    Section("Bienvenue dans Panier Futé 🛒") {
-        Text(
-            "Chaque semaine, l'app lit la circulaire de ton ${vm.reglages.marchand}, regarde ce que tu as déjà " +
-                "et te propose les repas et la liste d'épicerie qui profitent des rabais.",
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Etape(1, "Ajoute ta clé API DeepSeek", cleOk) { vm.onglet = Onglet.REGLAGES }
-        Etape(2, "Prends en photo garde-manger, frigo et congélateur", nbPhotos > 0) { vm.onglet = Onglet.PHOTOS }
-        Etape(3, "Génère ton plan (ou attends la génération automatique)", false) { }
-    }
-}
-
-@Composable
-private fun Etape(numero: Int, texte: String, faite: Boolean, action: () -> Unit) {
+private fun EtapeAccueil(numero: Int, texte: String, detail: String?, faite: Boolean, action: () -> Unit) {
+    val c = P.c
     Row(
-        Modifier.fillMaxWidth().clickable { action() }.padding(vertical = 4.dp),
+        Modifier.fillMaxWidth().clickable(onClick = action).padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Pastille(
-            if (faite) "✓" else numero.toString(),
-            if (faite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
-            if (faite) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(texte, style = MaterialTheme.typography.bodyLarge)
+        Box(
+            Modifier
+                .size(30.dp)
+                .clip(CircleShape)
+                .background(if (faite) c.action else c.carton)
+                .border(1.5.dp, if (faite) c.action else c.encre, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            if (faite) Icon(Icons.Filled.Check, contentDescription = null, tint = c.surAction, modifier = Modifier.size(18.dp))
+            else Text(numero.toString(), style = P.t.libelle, fontWeight = FontWeight.SemiBold, color = c.encre)
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(texte, style = P.t.corpsFort, color = c.encre)
+            if (detail != null) Text(detail, style = P.t.petit, color = c.encreDouce)
+        }
+        Icon(Icons.Filled.KeyboardArrowRight, contentDescription = null, tint = c.encreDouce)
     }
 }
 
 @Composable
-private fun CarteResume(plan: Plan) {
-    Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+private fun BlocTotal(plan: Plan, langue: Langue, t: Textes, ouvrirEpicerie: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = ouvrirEpicerie).padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(Modifier.padding(16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Semaine à partir du ${dateCourte(plan.debutPlan)}", style = MaterialTheme.typography.titleMedium)
-            if (plan.resume.isNotBlank()) Text(plan.resume, style = MaterialTheme.typography.bodyMedium)
-            HorizontalDivider()
-            if (plan.consignes.isNotBlank()) {
-                Text(
-                    "Version demandée : « ${plan.consignes} »",
-                    style = MaterialTheme.typography.bodySmall
-                )
+        EtiquetteTotalAvecTrou(plan.totalEstime, langue)
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(t.epicerieEstimee, style = P.t.corpsFort, color = P.c.encre)
+            Text(t.articlesResume(plan.epicerie.size, plan.nbRabais), style = P.t.petit, color = P.c.encreDouce)
+            plan.economiesEstimees?.takeIf { it > 0 }?.let {
+                Text(t.economies(argent(it, langue)), style = P.t.petit, fontWeight = FontWeight.SemiBold, color = P.c.celeri)
             }
-            Chiffre("Épicerie estimée, taxes incluses", "${argent(plan.totalEstime)} · ${plan.epicerie.size} articles")
-            if (plan.taxes > 0.0) Chiffre("dont TPS + TVQ", argent(plan.taxes))
-            plan.economiesEstimees?.let { Chiffre("Économies grâce aux rabais", argent(it)) }
-            if (plan.circulaireFin != null) Chiffre("Prix valides jusqu'au", dateCourte(plan.circulaireFin))
-            Chiffre(
-                "Coût de l'appel IA",
-                String.format(Locale.CANADA_FRENCH, "%.2f ¢ US", plan.coutUsd * 100) +
-                    " (${plan.nbPhotos} photo(s), ${plan.nbArticlesCirculaire} articles lus)"
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Repas, jour par jour
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun JourDuPlan(repas: List<Repas>, aujourdhui: LocalDate, t: Textes) {
+    val date = repas.first().date
+    val estAujourdhui = date == aujourdhui
+    Row(Modifier.fillMaxWidth()) {
+        Column(Modifier.width(58.dp)) {
+            if (date != null) {
+                Text(date.dayOfMonth.toString(), style = P.t.chiffreJour, color = P.c.encre)
+                Text(
+                    if (estAujourdhui) t.aujourdhuiCourt else t.jourCourt(date),
+                    style = P.t.libelle,
+                    fontWeight = if (estAujourdhui) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (estAujourdhui) P.c.encre else P.c.encreDouce
+                )
+            } else {
+                Text(repas.first().jour, style = P.t.libelle, color = P.c.encreDouce)
+            }
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            repas.forEach { BlocRepas(it, t) }
+        }
+    }
+}
+
+@Composable
+private fun BlocRepas(r: Repas, t: Textes) {
+    var ouvert by rememberSaveable(r.nom) { mutableStateOf(false) }
+    val c = P.c
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable { ouvert = !ouvert }
+            .animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                t.momentEtDuree(r.moment, r.tempsMin),
+                style = P.t.libelle,
+                color = c.encreDouce,
+                modifier = Modifier.weight(1f)
+            )
+            if (r.utiliseRabais) EtiquetteSpecial(t.special)
+        }
+        Text(r.nom, style = P.t.titreLigne, color = c.encre)
+        if (r.description.isNotBlank()) {
+            Text(
+                r.description,
+                style = P.t.corps,
+                color = c.encreDouce,
+                maxLines = if (ouvert) Int.MAX_VALUE else 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (ouvert) Recette(r, t)
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+            Text(if (ouvert) t.masquerRecette else t.voirRecette, style = P.t.libelle, fontWeight = FontWeight.SemiBold, color = c.encre)
+            Icon(
+                if (ouvert) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
+                tint = c.encre,
+                modifier = Modifier.size(18.dp)
             )
         }
     }
 }
 
 @Composable
-private fun Chiffre(libelle: String, valeur: String) {
-    Row(Modifier.fillMaxWidth()) {
-        Text(libelle, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        Text(valeur, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-@Composable
-private fun CarteRepas(r: Repas) {
-    var ouvert by remember { mutableStateOf(false) }
-    Card(
-        modifier = Modifier.fillMaxWidth().animateContentSize().clickable { ouvert = !ouvert },
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun Recette(r: Repas, t: Textes) {
+    val c = P.c
+    Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(t.ingredientsPour(r.portions), style = P.t.corpsFort, color = c.encre)
+        r.ingredients.forEach { i ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    majuscule(r.moment) + (if (r.tempsMin > 0) " · ${r.tempsMin} min" else ""),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.weight(1f)
+                    listOf(i.quantite, i.nom).filter { it.isNotBlank() }.joinToString(" "),
+                    style = P.t.corps,
+                    color = c.encre,
+                    modifier = Modifier.weight(1f).padding(end = 8.dp)
                 )
-                if (r.rabaisUtilises.isNotEmpty() || r.ingredients.any { it.source == "rabais" }) PastilleRabais()
-                Icon(
-                    if (ouvert) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = if (ouvert) "Réduire" else "Voir la recette"
-                )
+                when (i.source) {
+                    Source.RABAIS -> EtiquetteSpecial(t.sourceRabais)
+                    Source.STOCK -> Text(t.sourceStock, style = P.t.libelle, color = c.celeri)
+                    Source.BASE -> Text(t.sourceBase, style = P.t.libelle, color = c.encreDouce)
+                    Source.ACHAT -> Text(t.sourceAchat, style = P.t.libelle, color = c.encre)
+                }
             }
-            Text(r.nom, style = MaterialTheme.typography.titleMedium)
-            if (r.description.isNotBlank()) {
-                Text(r.description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (ouvert) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "Ingrédients" + (if (r.portions > 0) " (${r.portions} portions)" else ""),
-                    style = MaterialTheme.typography.titleSmall
-                )
-                r.ingredients.forEach { LigneIngredient(it) }
-                if (r.etapes.isNotEmpty()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text("Préparation", style = MaterialTheme.typography.titleSmall)
-                    r.etapes.forEachIndexed { i, e ->
-                        Text("${i + 1}. $e", style = MaterialTheme.typography.bodyMedium)
-                    }
+        }
+        if (r.etapes.isNotEmpty()) {
+            Text(t.preparation, style = P.t.corpsFort, color = c.encre, modifier = Modifier.padding(top = 8.dp))
+            r.etapes.forEachIndexed { n, etape ->
+                Row {
+                    Text(
+                        (n + 1).toString(),
+                        style = P.t.titreLigne.copy(fontFamily = BarlowCondensed),
+                        color = c.encre,
+                        modifier = Modifier.width(22.dp)
+                    )
+                    Texte(etape, Modifier.weight(1f))
                 }
             }
         }
     }
 }
 
-@Composable
-private fun LigneIngredient(i: IngredientRepas) {
-    val (etiquette, fond, encre) = when (i.source) {
-        "rabais" -> Triple("rabais", MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.onTertiaryContainer)
-        "inventaire" -> Triple("en stock", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.onPrimaryContainer)
-        "base" -> Triple("base", MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant)
-        else -> Triple("à acheter", MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer)
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            (if (i.quantite.isNotBlank()) i.quantite + " " else "") + i.nom,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f)
-        )
-        Pastille(etiquette, fond, encre)
-    }
-}
-
-private val ZONES = listOf(
-    "garde-manger" to "🥫 Garde-manger",
-    "frigo" to "🥬 Frigo",
-    "congelateur" to "❄️ Congélateur"
-)
-
-/** Normalise la zone renvoyée par l'IA (« congélateur », « Frigo », etc.). */
-private fun cleZone(zone: String): String {
-    val z = zone.lowercase().replace("é", "e").trim()
-    return when {
-        z.startsWith("cong") -> "congelateur"
-        z.startsWith("frig") || z.startsWith("refrig") -> "frigo"
-        z.startsWith("garde") || z.startsWith("armoire") -> "garde-manger"
-        else -> "autre"
-    }
-}
+// ---------------------------------------------------------------------------
+// Inventaire : ce que l'IA a vu, corrigeable
+// ---------------------------------------------------------------------------
 
 @Composable
-private fun CarteInventaire(vm: AppViewModel, plan: Plan) {
-    var ouvert by remember { mutableStateOf(false) }
-    // index -1 = ajout d'un nouvel aliment
+private fun BlocInventaire(ui: EtatApp, plan: Plan) {
+    val t = ui.t
+    var ouvert by rememberSaveable { mutableStateOf(false) }
     var edition by remember { mutableStateOf<Pair<Int, ItemInventaire>?>(null) }
     val items = plan.inventaire
 
-    Section("Ce que l'IA a vu chez toi (${items.size})") {
-        Text(
-            if (plan.inventaireCorrige) "✓ Corrigé par toi. Régénère le plan pour que les repas en tiennent compte."
-            else "Une erreur ou un oubli ? Corrige ici, puis régénère le plan.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { ouvert = !ouvert }) { Text(if (ouvert) "Masquer" else "Afficher et modifier") }
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = { edition = -1 to ItemInventaire("", "frigo", "", false) }) {
-                Icon(Icons.Filled.Add, contentDescription = null)
-                Spacer(Modifier.width(4.dp))
-                Text("Ajouter")
-            }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        TitreSection(t.titreInventaire(items.size)) {
+            BoutonTexte(t.ajouter, onClick = { edition = -1 to ItemInventaire("", Endroit.FRIGO, "", false) })
         }
-        if (ouvert) {
-            if (items.isEmpty()) {
-                Text("Aucun aliment pour l'instant.", style = MaterialTheme.typography.bodyMedium)
-            }
-            val groupes = items.withIndex().groupBy { cleZone(it.value.zone) }
-            (ZONES.map { it.first } + "autre").forEach { cle ->
-                val liste = groupes[cle].orEmpty()
-                if (liste.isNotEmpty()) {
-                    Text(
-                        ZONES.firstOrNull { it.first == cle }?.second ?: "Autre",
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                    liste.forEach { (index, item) ->
-                        LigneAliment(
-                            item = item,
-                            editer = { edition = index to item },
-                            retirer = { vm.retirerAliment(index) }
-                        )
+        Texte(if (plan.inventaireCorrige) t.inventaireCorrige else t.inventaireAide, doux = true, style = P.t.petit)
+        if (!ouvert) {
+            BoutonSecondaire(t.voirEtCorriger, onClick = { ouvert = true }, modifier = Modifier.fillMaxWidth())
+        } else {
+            Feuille(padding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+                if (items.isEmpty()) Texte(t.inventaireVide, doux = true)
+                val groupes = items.withIndex().groupBy { it.value.endroit }
+                Endroit.entries.forEach { endroit ->
+                    val liste = groupes[endroit].orEmpty()
+                    if (liste.isNotEmpty()) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+                            Icon(iconeEndroit(endroit), contentDescription = null, tint = P.c.encre, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(t.endroit(endroit), style = P.t.corpsFort, color = P.c.encre)
+                        }
+                        liste.forEach { (index, item) ->
+                            LigneAliment(item, t, editer = { edition = index to item }, retirer = { ui.retirerAliment(index) })
+                        }
                     }
                 }
             }
+            BoutonTexte(t.masquer, onClick = { ouvert = false })
         }
     }
 
-    val enCours = edition
-    if (enCours != null) {
-        val (index, item) = enCours
+    edition?.let { (index, item) ->
         DialogueAliment(
             initial = item,
             nouveau = index < 0,
+            t = t,
             fermer = { edition = null },
             valider = { nouvel ->
                 if (index < 0) {
-                    vm.ajouterAliment(nouvel)
+                    ui.ajouterAliment(nouvel)
                     ouvert = true
                 } else {
-                    vm.remplacerAliment(index, nouvel)
+                    ui.remplacerAliment(index, nouvel)
                 }
                 edition = null
             }
@@ -458,27 +450,22 @@ private fun CarteInventaire(vm: AppViewModel, plan: Plan) {
 }
 
 @Composable
-private fun LigneAliment(item: ItemInventaire, editer: () -> Unit, retirer: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clickable { editer() },
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
-            Text(item.nom, style = MaterialTheme.typography.bodyMedium)
-            val details = listOfNotNull(
-                item.quantite.ifBlank { null },
-                if (item.utiliserVite) "⏰ à utiliser vite" else null
-            )
-            if (details.isNotEmpty()) {
-                Text(
-                    details.joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+private fun LigneAliment(item: ItemInventaire, t: Textes, editer: () -> Unit, retirer: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = editer), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(start = 28.dp, top = 4.dp, bottom = 4.dp)) {
+            Text(item.nom, style = P.t.corps, color = P.c.encre)
+            if (item.quantite.isNotBlank() || item.utiliserVite) {
+                Row {
+                    if (item.quantite.isNotBlank()) {
+                        Text(item.quantite, style = P.t.petit, color = P.c.encreDouce)
+                        if (item.utiliserVite) Spacer(Modifier.width(10.dp))
+                    }
+                    if (item.utiliserVite) Text(t.utiliserVite, style = P.t.petit, fontWeight = FontWeight.SemiBold, color = P.c.tomate)
+                }
             }
         }
-        IconButton(onClick = editer) { Icon(Icons.Filled.Edit, contentDescription = "Modifier") }
-        IconButton(onClick = retirer) { Icon(Icons.Filled.Delete, contentDescription = "Retirer") }
+        IconButton(onClick = editer) { Icon(Icons.Filled.Edit, contentDescription = t.modifier, tint = P.c.encreDouce) }
+        IconButton(onClick = retirer) { Icon(Icons.Filled.Delete, contentDescription = t.retirer, tint = P.c.encreDouce) }
     }
 }
 
@@ -486,52 +473,121 @@ private fun LigneAliment(item: ItemInventaire, editer: () -> Unit, retirer: () -
 private fun DialogueAliment(
     initial: ItemInventaire,
     nouveau: Boolean,
+    t: Textes,
     fermer: () -> Unit,
     valider: (ItemInventaire) -> Unit
 ) {
     var nom by remember(initial) { mutableStateOf(initial.nom) }
     var quantite by remember(initial) { mutableStateOf(initial.quantite) }
-    var zone by remember(initial) {
-        mutableStateOf(cleZone(initial.zone).let { if (it == "autre") "frigo" else it })
+    var endroit by remember(initial) {
+        mutableStateOf(if (initial.endroit == Endroit.AUTRE) Endroit.FRIGO else initial.endroit)
     }
     var vite by remember(initial) { mutableStateOf(initial.utiliserVite) }
 
     AlertDialog(
         onDismissRequest = fermer,
-        title = { Text(if (nouveau) "Ajouter un aliment" else "Modifier l'aliment") },
+        containerColor = P.c.carton,
+        shape = RoundedCornerShape(22.dp),
+        title = { Text(if (nouveau) t.ajouterAliment else t.modifierAliment, style = P.t.titreSection, color = P.c.encre) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = nom,
-                    onValueChange = { nom = it },
-                    label = { Text("Aliment") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = quantite,
-                    onValueChange = { quantite = it },
-                    label = { Text("Quantité (facultatif)") },
-                    placeholder = { Text("ex. : 500 g, environ 4, ½ pot") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ZONES.forEach { (cle, titre) ->
-                        FilterChip(selected = zone == cle, onClick = { zone = cle }, label = { Text(titre) })
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Champ(nom, { nom = it }, t.aliment)
+                Champ(quantite, { quantite = it }, t.quantiteFacultative, exemple = t.exempleQuantite)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(Endroit.GARDE_MANGER, Endroit.FRIGO, Endroit.CONGELATEUR).forEach { e ->
+                        Puce(t.endroit(e), endroit == e) { endroit = e }
                     }
                 }
-                LigneInterrupteur("À utiliser vite", null, vite) { vite = it }
+                LigneInterrupteur(t.utiliserVite, null, vite) { vite = it }
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = { valider(ItemInventaire(nom.trim(), zone, quantite.trim(), vite)) },
-                enabled = nom.isNotBlank()
-            ) { Text(if (nouveau) "Ajouter" else "Enregistrer") }
+            BoutonTexte(
+                if (nouveau) t.ajouter else t.enregistrer,
+                onClick = { valider(ItemInventaire(nom.trim(), endroit, quantite.trim(), vite)) },
+                actif = nom.isNotBlank()
+            )
         },
-        dismissButton = {
-            TextButton(onClick = fermer) { Text("Annuler") }
+        dismissButton = { BoutonTexte(t.annuler, onClick = fermer) }
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Régénérer et pied de page
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun BlocRegenerer(
+    t: Textes,
+    consignes: String,
+    changerConsignes: (String) -> Unit,
+    garder: Boolean,
+    changerGarder: (Boolean) -> Unit,
+    occupe: Boolean,
+    lancer: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        TitreSection(t.titreRegenerer)
+        Texte(t.regenererAide, doux = true, style = P.t.petit)
+        Champ(
+            consignes,
+            changerConsignes,
+            t.nouvellesPreferences,
+            exemple = t.exempleConsignes,
+            uneLigne = false,
+            lignesMin = 2
+        )
+        Row(
+            Modifier.fillMaxWidth().clickable { changerGarder(!garder) }.padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CaseACocher(garder, onClick = null)
+            Spacer(Modifier.width(12.dp))
+            Texte(t.garderPreferences)
         }
+        BoutonPrincipal(
+            t.regenerer,
+            onClick = lancer,
+            actif = !occupe,
+            icone = painterResource(R.drawable.ic_semaine),
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun PiedDePage(plan: Plan, ui: EtatApp) {
+    val t = ui.t
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Separateur(Modifier.padding(bottom = 8.dp))
+        Texte(t.prochainRappel(ui.prochainRappel), doux = true, style = P.t.petit)
+        Texte(t.prochaineGeneration(ui.prochaineGeneration), doux = true, style = P.t.petit)
+        Texte(
+            plan.coutUsd?.let { t.coutIA(plan.fournisseur, it * 100, plan.nbPhotos, plan.nbArticlesCirculaire) }
+                ?: t.jetonsIA(plan.fournisseur, plan.jetonsEntree, plan.jetonsSortie, plan.nbPhotos, plan.nbArticlesCirculaire),
+            doux = true,
+            style = P.t.petit
+        )
+    }
+}
+
+/** Dialogue de confirmation aux couleurs de l'app. */
+@Composable
+fun Dialogue(
+    titre: String,
+    texte: String,
+    confirmer: String,
+    annuler: String,
+    fermer: () -> Unit,
+    valider: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = fermer,
+        containerColor = P.c.carton,
+        shape = RoundedCornerShape(22.dp),
+        title = { Text(titre, style = P.t.titreSection, color = P.c.encre) },
+        text = { Texte(texte) },
+        confirmButton = { BoutonTexte(confirmer, onClick = valider) },
+        dismissButton = { BoutonTexte(annuler, onClick = fermer) }
     )
 }

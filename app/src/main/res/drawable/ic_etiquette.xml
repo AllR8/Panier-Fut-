@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Étiquette de prix -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M8.5,5.5h11.75v13h-11.75l-5.75,-6.5z"
+        android:strokeColor="#FF000000" android:strokeWidth="1.8" android:strokeLineJoin="round" android:fillColor="#00000000"/>
+    <path android:pathData="M8.75,12m-1.4,0a1.4,1.4 0,1 1,2.8 0a1.4,1.4 0,1 1,-2.8 0"
+        android:fillColor="#FF000000"/>
+</vector>

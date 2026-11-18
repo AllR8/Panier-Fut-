@@ -4,6 +4,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Captures d'écran des écrans (./gradlew -Pcaptures recordPaparazziDebug), sans effet sur l'APK.
+if (providers.gradleProperty("captures").isPresent) {
+    apply(plugin = "app.cash.paparazzi")
+}
+
 android {
     namespace = "ca.panierfute"
     compileSdk = 35
@@ -12,8 +17,8 @@ android {
         applicationId = "ca.panierfute"
         minSdk = 28          // Android 9+ (tous les Galaxy récents)
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "2.0"
     }
 
     // Clé de signature personnelle, optionnelle et jamais versionnée sur GitHub.

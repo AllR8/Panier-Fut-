@@ -7,6 +7,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,19 +24,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -56,8 +53,9 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
-fun EcranPhotos(vm: AppViewModel) {
+fun EcranPhotos(ui: EtatApp) {
     val ctx = LocalContext.current
+    val t = ui.t
 
     // Gardés à travers une éventuelle recréation de l'activité pendant que l'appareil photo est ouvert
     var zoneCapture by rememberSaveable { mutableStateOf<String?>(null) }
@@ -67,7 +65,7 @@ fun EcranPhotos(vm: AppViewModel) {
     val appareil = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         val zone = Zone.depuisCle(zoneCapture)
         val fichier = cheminCapture?.let { File(it) }
-        if (ok && zone != null && fichier != null) vm.ajouterCapture(zone, fichier) else fichier?.delete()
+        if (ok && zone != null && fichier != null) ui.ajouterCapture(zone, fichier) else fichier?.delete()
         zoneCapture = null
         cheminCapture = null
     }
@@ -75,7 +73,7 @@ fun EcranPhotos(vm: AppViewModel) {
         ActivityResultContracts.PickMultipleVisualMedia(Photos.MAX_PAR_ZONE)
     ) { uris ->
         val zone = Zone.depuisCle(zoneGalerie)
-        if (zone != null && uris.isNotEmpty()) vm.ajouterGalerie(zone, uris)
+        if (zone != null && uris.isNotEmpty()) ui.ajouterGalerie(zone, uris)
         zoneGalerie = null
     }
 
@@ -87,7 +85,7 @@ fun EcranPhotos(vm: AppViewModel) {
         try {
             appareil.launch(uri)
         } catch (e: Exception) {
-            vm.message = "Aucune application d'appareil photo trouvée."
+            ui.message = t.aucunAppareilPhoto
         }
     }
 
@@ -96,105 +94,93 @@ fun EcranPhotos(vm: AppViewModel) {
         try {
             galerie.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         } catch (e: Exception) {
-            vm.message = "Impossible d'ouvrir la galerie."
+            ui.message = t.galerieImpossible
         }
     }
 
-    val total = vm.photos.values.sumOf { it.size }
+    val total = ui.photos.values.sumOf { it.size }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = PaddingValues(start = MARGE, end = MARGE, top = 8.dp, bottom = 40.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        item {
-            EnTete(
-                "Chez nous",
-                "Photographie ce que tu as déjà : l'IA en tiendra compte pour éviter d'acheter en double " +
-                    "et utiliser ce qui doit être mangé vite."
-            )
-        }
+        item { EnTete(t.titrePhotos, t.photosIntro) }
         items(Zone.entries.toList()) { zone ->
-            val liste = vm.photos[zone].orEmpty()
-            Section("${zone.emoji}  ${zone.titre}  (${liste.size}/${Photos.MAX_PAR_ZONE})") {
-                Text(zone.conseil, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val liste = ui.photos[zone].orEmpty()
+            val plein = liste.size >= Photos.MAX_PAR_ZONE
+            Feuille {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(iconeZone(zone), contentDescription = null, tint = P.c.encre, modifier = Modifier.size(28.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(t.zone(zone), style = P.t.titreSection, color = P.c.encre)
+                        Text(t.conseilZone(zone), style = P.t.petit, color = P.c.encreDouce)
+                    }
+                    Text("${liste.size}/${Photos.MAX_PAR_ZONE}", style = P.t.libelle, color = P.c.encreDouce)
+                }
                 if (liste.isNotEmpty()) {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(liste) { f -> Miniature(f) { vm.supprimerPhoto(f) } }
+                        items(liste) { f -> Miniature(f, t.supprimerPhoto) { ui.supprimerPhoto(f) } }
                     }
                 }
-                val plein = liste.size >= Photos.MAX_PAR_ZONE
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = { prendrePhoto(zone) }, enabled = !plein) {
-                        Icon(painterResource(R.drawable.ic_camera), contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Photo")
-                    }
-                    OutlinedButton(onClick = { choisirGalerie(zone) }, enabled = !plein) {
-                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Galerie")
-                    }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    BoutonPrincipal(
+                        t.prendrePhoto,
+                        onClick = { prendrePhoto(zone) },
+                        actif = !plein,
+                        icone = painterResource(R.drawable.ic_camera),
+                        modifier = Modifier.weight(1f)
+                    )
+                    BoutonSecondaire(
+                        t.galerie,
+                        onClick = { choisirGalerie(zone) },
+                        actif = !plein,
+                        icone = rememberVectorPainter(Icons.Filled.Add)
+                    )
                 }
             }
         }
         item {
-            Section("Prêt ?") {
-                Text(
-                    if (total == 0) {
-                        "Aucune photo pour l'instant. Sans photo, le plan se basera seulement sur tes ingrédients de base."
-                    } else {
-                        "$total photo(s) prête(s). Elles seront analysées à la génération automatique " +
-                            "(${vm.prochaineGeneration}), ou tout de suite avec le bouton ci-dessous. " +
-                            "Elles sont effacées une fois analysées."
-                    },
-                    style = MaterialTheme.typography.bodyMedium
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 6.dp)) {
+                Texte(
+                    if (total == 0) t.photosAucune else t.photosPretes(total, ui.prochaineGeneration),
+                    doux = true
                 )
-                Button(
-                    onClick = { vm.generer(); vm.onglet = Onglet.SEMAINE },
-                    enabled = !vm.generationEnCours && !vm.attenteReseau,
+                BoutonSecondaire(
+                    t.genererPlan,
+                    onClick = { ui.generer(); ui.onglet = Onglet.SEMAINE },
+                    actif = !ui.generationEnCours && !ui.attenteReseau,
                     modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Filled.Refresh, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Générer mon plan maintenant")
-                }
+                )
             }
         }
     }
 }
 
 @Composable
-private fun Miniature(fichier: File, supprimer: () -> Unit) {
+private fun Miniature(fichier: File, description: String, supprimer: () -> Unit) {
     val image by produceState<ImageBitmap?>(null, fichier) {
         value = withContext(Dispatchers.IO) { Photos.miniature(fichier)?.asImageBitmap() }
     }
     Box(
         Modifier
-            .size(104.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .size(width = 112.dp, height = 84.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(P.c.trait)
     ) {
-        val img = image
-        if (img != null) {
-            Image(
-                bitmap = img,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
+        image?.let {
+            Image(bitmap = it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         }
         IconButton(
             onClick = supprimer,
-            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(28.dp)
+            modifier = Modifier.align(Alignment.TopEnd).padding(2.dp).size(30.dp)
         ) {
             Icon(
                 Icons.Filled.Close,
-                contentDescription = "Supprimer la photo",
+                contentDescription = description,
                 tint = Color.White,
-                modifier = Modifier
-                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
-                    .padding(3.dp)
+                modifier = Modifier.background(Color.Black.copy(alpha = 0.55f), CircleShape).padding(3.dp)
             )
         }
     }

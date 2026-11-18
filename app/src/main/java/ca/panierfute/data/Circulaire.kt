@@ -1,8 +1,10 @@
 package ca.panierfute.data
 
+import ca.panierfute.i18n.Textes
 import org.json.JSONObject
 import java.io.IOException
 import java.net.URLEncoder
+import java.text.Collator
 import java.time.LocalDate
 import java.time.OffsetDateTime
 
@@ -27,51 +29,121 @@ data class Circulaire(
             append("- ").append(a.nom)
             if (a.marque != null && !a.nom.contains(a.marque, ignoreCase = true)) append(" [").append(a.marque).append("]")
             if (a.prix != null) append(" | ").append(a.prix).append(" \$")
-            if (a.rabais != null) append(" | rabais ").append(a.rabais)
+            if (a.rabais != null) append(" | ").append(a.rabais)
             if (a.validJusquau != null && fin != null && a.validJusquau.isBefore(fin)) {
-                append(" | jusqu'au ").append(a.validJusquau)
+                append(" | until ").append(a.validJusquau)
             }
             append('\n')
         }
     }
 }
 
+/** Une épicerie qui publie une circulaire près d'un code postal. */
+data class Epicerie(
+    val id: Long,
+    val nom: String,
+    val logo: String,
+    val debut: LocalDate?,      // circulaire en cours (ou la prochaine)
+    val fin: LocalDate?,
+    val alimentation: Boolean   // catégorie « Groceries » chez Flipp
+)
+
 /**
- * Lecture de la circulaire via Flipp, le service qui héberge les circulaires
- * numériques des épiciers canadiens (dont Maxi). API publique mais non officielle :
- * si Flipp la modifie, c'est ce fichier qu'il faudra ajuster.
+ * Lecture des circulaires via Flipp, le service qui héberge les circulaires
+ * numériques des détaillants au Canada et aux États-Unis. API publique mais non
+ * officielle : si Flipp la modifie, c'est ce fichier qu'il faudra ajuster.
  */
 object SourceCirculaire {
     private const val BASE = "https://backflipp.wishabi.com/flipp"
 
-    fun charger(codePostal: String, marchand: String): Circulaire {
-        val cp = codePostal.replace(" ", "").uppercase()
-        val cpUrl = URLEncoder.encode(cp, "UTF-8")
-        val liste = JSONObject(Http.get("$BASE/flyers?locale=fr-ca&postal_code=$cpUrl"))
+    private data class Candidate(
+        val id: Long,
+        val titre: String,
+        val marchandId: Long,
+        val marchand: String,
+        val logo: String,
+        val alimentation: Boolean,
+        val debut: OffsetDateTime?,
+        val fin: OffsetDateTime?
+    )
+
+    /** Langue des circulaires : français au Québec si l'app est en français, sinon anglais. */
+    private fun localeFlipp(codePostal: String, langue: Langue): String {
+        val region = Region.depuisCodePostal(codePostal)
+        return when {
+            region.pays == "US" -> "en-us"
+            langue == Langue.FR -> "fr-ca"
+            else -> "en-ca"
+        }
+    }
+
+    private fun lireListe(codePostal: String, langue: Langue): List<Candidate> {
+        val cp = Region.normaliserCodePostal(codePostal)
+        val url = "$BASE/flyers?locale=${localeFlipp(cp, langue)}&postal_code=${URLEncoder.encode(cp, "UTF-8")}"
         val maintenant = OffsetDateTime.now()
-
-        data class Candidate(val id: Long, val titre: String, val debut: OffsetDateTime?, val fin: OffsetDateTime?)
-
-        val candidates = liste.optJSONArray("flyers").objets()
-            .filter { it.txt("merchant").equals(marchand.trim(), ignoreCase = true) }
+        return JSONObject(Http.get(url)).optJSONArray("flyers").objets()
             .map {
                 Candidate(
                     id = it.optLong("id"),
                     titre = it.txt("name"),
+                    marchandId = it.optLong("merchant_id"),
+                    marchand = it.txt("merchant").trim(),
+                    logo = it.txt("merchant_logo").replaceFirst("http://", "https://"),
+                    alimentation = it.optJSONArray("categories").textes()
+                        .any { c -> c.equals("Groceries", ignoreCase = true) },
                     debut = date(it.txt("valid_from")),
                     fin = date(it.txt("valid_to"))
                 )
             }
-            .filter { it.id > 0 && (it.fin == null || it.fin.isAfter(maintenant)) }
+            .filter { it.id > 0 && it.marchand.isNotEmpty() && (it.fin == null || it.fin.isAfter(maintenant)) }
+    }
 
-        if (candidates.isEmpty()) {
-            throw IOException("Aucune circulaire « $marchand » trouvée pour le code postal $cp.")
+    /** Épiceries ayant une circulaire près de ce code postal (alimentation d'abord). */
+    fun listerEpiceries(codePostal: String, langue: Langue): List<Epicerie> {
+        val maintenant = OffsetDateTime.now()
+        val collator = Collator.getInstance(langue.locale)
+        return lireListe(codePostal, langue)
+            .groupBy { if (it.marchandId > 0) it.marchandId.toString() else it.marchand.lowercase() }
+            .values
+            .map { flyers ->
+                val alimentation = flyers.any { it.alimentation }
+                val pertinents = flyers.filter { it.alimentation == alimentation }
+                // La circulaire en cours, sinon la prochaine.
+                val courante = pertinents
+                    .filter { it.debut == null || !it.debut.isAfter(maintenant) }
+                    .minByOrNull { it.fin ?: maintenant.plusYears(1) }
+                    ?: pertinents.minByOrNull { it.debut ?: maintenant }
+                val premier = flyers.first()
+                Epicerie(
+                    id = premier.marchandId,
+                    nom = premier.marchand,
+                    logo = flyers.firstOrNull { it.logo.isNotEmpty() }?.logo ?: "",
+                    debut = courante?.debut?.toLocalDate(),
+                    fin = courante?.fin?.toLocalDate(),
+                    alimentation = alimentation
+                )
+            }
+            .sortedWith(compareBy<Epicerie> { !it.alimentation }.thenComparator { a, b -> collator.compare(a.nom, b.nom) })
+    }
+
+    fun charger(r: EtatReglages, t: Textes): Circulaire {
+        val marchand = r.marchand.trim()
+        if (marchand.isEmpty() || r.codePostal.isBlank()) throw IOException(t.erreurAucuneEpicerie)
+        val maintenant = OffsetDateTime.now()
+
+        val candidates = lireListe(r.codePostal, r.langue).filter {
+            if (r.marchandId > 0) it.marchandId == r.marchandId else it.marchand.equals(marchand, ignoreCase = true)
         }
+        if (candidates.isEmpty()) {
+            throw IOException(t.erreurCirculaireIntrouvable(marchand, Region.afficherCodePostal(r.codePostal)))
+        }
+        // Si l'épicerie a une circulaire d'alimentation, on ignore ses autres circulaires (jouets, etc.).
+        val utiles = if (candidates.any { it.alimentation }) candidates.filter { it.alimentation } else candidates
 
         // Circulaires en vigueur maintenant ; si elles se terminent dans moins de 2 jours
         // et que la suivante est déjà publiée, on prend plutôt la suivante.
-        val actives = candidates.filter { it.debut == null || !it.debut.isAfter(maintenant.plusHours(12)) }
-        val aVenir = candidates.filter { it.debut != null && it.debut.isAfter(maintenant.plusHours(12)) }
+        val actives = utiles.filter { it.debut == null || !it.debut.isAfter(maintenant.plusHours(12)) }
+        val aVenir = utiles.filter { it.debut != null && it.debut.isAfter(maintenant.plusHours(12)) }
         val finActives = actives.mapNotNull { it.fin }.maxOrNull()
         val retenues = when {
             actives.isNotEmpty() && (finActives == null || finActives.isAfter(maintenant.plusDays(2))) -> actives
@@ -82,10 +154,11 @@ object SourceCirculaire {
             else -> actives
         }
 
+        val locale = localeFlipp(r.codePostal, r.langue)
         val vus = HashSet<String>()
         val articles = ArrayList<ArticleCirculaire>()
         for (c in retenues) {
-            val detail = JSONObject(Http.get("$BASE/flyers/${c.id}?locale=fr-ca"))
+            val detail = JSONObject(Http.get("$BASE/flyers/${c.id}?locale=$locale"))
             for (item in detail.optJSONArray("items").objets()) {
                 val nom = item.txtOuNull("name") ?: continue
                 val prix = item.txtOuNull("price") ?: item.txtOuNull("current_price")
@@ -103,7 +176,7 @@ object SourceCirculaire {
                 )
             }
         }
-        if (articles.isEmpty()) throw IOException("La circulaire « $marchand » est vide ou illisible.")
+        if (articles.isEmpty()) throw IOException(t.erreurCirculaireVide(marchand))
 
         return Circulaire(
             marchand = marchand,

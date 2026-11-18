@@ -14,6 +14,9 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import ca.panierfute.MainActivity
 import ca.panierfute.R
+import ca.panierfute.data.Reglages
+import ca.panierfute.i18n.Textes
+import ca.panierfute.i18n.textes
 
 object Notifs {
     private const val CANAL = "panier_semaine"
@@ -22,23 +25,24 @@ object Notifs {
     private const val ID_ERREUR = 3
     const val EXTRA_ONGLET = "onglet"
 
+    /** Crée (ou renomme, après un changement de langue) le canal de notifications. */
     fun creerCanal(ctx: Context) {
-        val canal = NotificationChannel(
-            CANAL, "Épicerie de la semaine", NotificationManager.IMPORTANCE_DEFAULT
-        ).apply { description = "Rappel des photos et plan de repas prêt" }
+        val t = textes(Reglages(ctx).langue)
+        val canal = NotificationChannel(CANAL, t.notifCanalNom, NotificationManager.IMPORTANCE_DEFAULT)
+            .apply { description = t.notifCanalDescription }
         ctx.getSystemService(NotificationManager::class.java)?.createNotificationChannel(canal)
     }
 
-    fun rappelPhotos(ctx: Context, texte: String) =
-        publier(ctx, ID_RAPPEL, "📸 Photos du frigo, svp !", texte, "photos")
+    fun rappelPhotos(ctx: Context, t: Textes, texte: String) =
+        publier(ctx, ID_RAPPEL, t.notifRappelTitre, texte, "photos")
 
-    fun planPret(ctx: Context, texte: String) {
+    fun planPret(ctx: Context, t: Textes, texte: String) {
         NotificationManagerCompat.from(ctx).cancel(ID_RAPPEL)
-        publier(ctx, ID_PLAN, "🛒 Ton plan de la semaine est prêt", texte, "semaine")
+        publier(ctx, ID_PLAN, t.notifPlanTitre, texte, "semaine")
     }
 
-    fun erreur(ctx: Context, texte: String) =
-        publier(ctx, ID_ERREUR, "Panier Futé : génération impossible", texte, "semaine")
+    fun erreur(ctx: Context, t: Textes, texte: String) =
+        publier(ctx, ID_ERREUR, t.notifErreurTitre, texte, "semaine")
 
     private fun intention(ctx: Context, onglet: String, code: Int): PendingIntent {
         val i = Intent(ctx, MainActivity::class.java).apply {
@@ -57,6 +61,7 @@ object Notifs {
         ) return
         val n = NotificationCompat.Builder(ctx, CANAL)
             .setSmallIcon(R.drawable.ic_notif)
+            .setColor(0xFF173A2C.toInt())
             .setContentTitle(titre)
             .setContentText(texte)
             .setStyle(NotificationCompat.BigTextStyle().bigText(texte))
