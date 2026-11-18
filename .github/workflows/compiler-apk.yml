@@ -116,3 +116,18 @@ jobs:
             app/src/test/snapshots/images/
             app/build/reports/tests/
           if-no-files-found: ignore
+
+      # Copie des captures sur la branche « captures-ecrans » (consultable sans télécharger d'artefact).
+      - name: Publier les captures
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -d app/src/test/snapshots/images ] || exit 0
+          mkdir -p /tmp/captures && cp app/src/test/snapshots/images/*.png /tmp/captures/
+          cd /tmp/captures
+          git init -q -b captures-ecrans
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add . && git commit -q -m "Captures de ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" captures-ecrans
