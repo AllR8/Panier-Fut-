@@ -171,11 +171,11 @@ private fun SectionEpicerie(ui: EtatApp) {
     if (Region.codePostalValide(r.codePostal)) {
         val region = r.region
         var tauxTexte by remember(r.codePostal) {
-            mutableStateOf(if (r.tauxTaxesPerso >= 0) pourcentage(r.tauxTaxesPerso * 100) else "")
+            mutableStateOf(if (r.tauxTaxesPerso >= 0) pourcentage(r.tauxTaxesPerso * 100, r.langue) else "")
         }
         Feuille {
             Text(t.taxesTitre, style = P.t.corpsFort, color = P.c.encre)
-            Texte(t.taxesAide(pourcentage(region.tauxTaxes * 100), region.nom), doux = true, style = P.t.petit)
+            Texte(t.taxesAide(t.pourcent(region.tauxTaxes * 100), region.nom), doux = true, style = P.t.petit)
             Champ(
                 tauxTexte,
                 { v ->
@@ -184,7 +184,7 @@ private fun SectionEpicerie(ui: EtatApp) {
                     ui.maj { it.copy(tauxTaxesPerso = if (n == null || v.isBlank()) -1.0 else n.coerceIn(0.0, 30.0) / 100) }
                 },
                 t.tauxTaxes,
-                exemple = pourcentage(region.tauxTaxes * 100),
+                exemple = pourcentage(region.tauxTaxes * 100, r.langue),
                 clavier = KeyboardType.Decimal
             )
         }
@@ -231,9 +231,9 @@ private fun LigneEpicerie(e: Epicerie, choisie: Boolean, ui: EtatApp, choisir: (
     }
 }
 
-private fun pourcentage(v: Double): String {
+private fun pourcentage(v: Double, langue: Langue): String {
     val s = String.format(java.util.Locale.ROOT, "%.3f", v).trimEnd('0').trimEnd('.')
-    return s
+    return if (langue == Langue.EN) s else s.replace('.', ',')
 }
 
 // ---------------------------------------------------------------------------

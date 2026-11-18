@@ -214,7 +214,7 @@ object TextesEn : Textes(Langue.EN) {
     override val afficherToutesAide = "Big-box stores and pharmacies that also sell food"
     override val taxesTitre = "Tax on taxable items"
     override fun taxesAide(pourcentage: String, region: String) =
-        "Your region's rate: $pourcentage% ($region). Leave blank to use it, or enter your own rate."
+        "Your region's rate: $pourcentage ($region). Leave blank to use it, or enter your own rate."
     override val tauxTaxes = "Custom rate (%)"
     override fun circulaireChangeLe(jour: DayOfWeek) = "Your flyer changes on ${nomJour(jour)}"
     override val alignerAide =

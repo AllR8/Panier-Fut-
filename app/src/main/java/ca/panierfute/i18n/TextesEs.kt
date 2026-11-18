@@ -213,7 +213,7 @@ object TextesEs : Textes(Langue.ES) {
     override val afficherToutesAide = "Grandes tiendas y farmacias que también venden alimentos"
     override val taxesTitre = "Impuestos sobre artículos gravados"
     override fun taxesAide(pourcentage: String, region: String) =
-        "Tasa de tu región: $pourcentage % ($region). Déjalo vacío para usarla o escribe tu propia tasa."
+        "Tasa de tu región: $pourcentage ($region). Déjalo vacío para usarla o escribe tu propia tasa."
     override val tauxTaxes = "Tasa personalizada (%)"
     override fun circulaireChangeLe(jour: DayOfWeek) = "Tu folleto cambia el ${nomJour(jour)}"
     override val alignerAide =
